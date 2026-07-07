@@ -169,3 +169,36 @@ def update_ai_fields(ticket_id: str, ai_summary: str, urgency: str, description:
 
 def next_ticket_id() -> str:
     return f"T{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{secrets.token_hex(2)}"
+
+
+def get_company_machines(company_code: str):
+    """Get all machines for a company."""
+    with _lock:
+        wb = openpyxl.load_workbook(config.TRACKER_XLSX_PATH, data_only=True)
+        ws = wb["Machines"]
+        machines = []
+        for row_cells in ws.iter_rows(min_row=2, values_only=False):
+            company = row_cells[_MACHINES_HEADER.index("company_code")].value
+            if company == company_code:
+                machine = {}
+                for i, col in enumerate(_MACHINES_HEADER):
+                    machine[col] = row_cells[i].value
+                machines.append(machine)
+        return machines
+
+
+def get_company_tickets(company_code: str):
+    """Get all tickets for a company."""
+    with _lock:
+        wb = openpyxl.load_workbook(config.TRACKER_XLSX_PATH, data_only=True)
+        ws = wb["Tickets"]
+        tickets = []
+        for row_cells in ws.iter_rows(min_row=2, values_only=False):
+            company = row_cells[_TICKETS_HEADER.index("company_code")].value
+            if company == company_code:
+                ticket = {}
+                for i, col in enumerate(_TICKETS_HEADER):
+                    val = row_cells[i].value
+                    ticket[col] = val
+                tickets.append(ticket)
+        return tickets

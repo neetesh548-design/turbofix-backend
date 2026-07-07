@@ -110,6 +110,79 @@ def signup(body: SignupRequest):
 
 
 # ---------------------------------------------------------------------------
+# Dashboard — per-company KPIs, server-side computed, JWT-scoped
+# ---------------------------------------------------------------------------
+
+def _compute_kpis(company_code: str, company_name: str):
+    """Compute live KPIs for a company from tickets and machines."""
+    machines = store.get_company_machines(company_code)
+    tickets = store.get_company_tickets(company_code)
+
+    # KPIs
+    open_tickets = sum(1 for t in tickets if t.get("status") == "Open")
+    closed_today = sum(1 for t in tickets
+                       if t.get("status") == "Closed"
+                       and t.get("closed_at")
+                       and datetime.fromisoformat(str(t["closed_at"]).replace("Z", "+00:00")).date() == datetime.now(timezone.utc).date())
+    machines_down = sum(1 for m in machines if m.get("has_open_tickets"))
+    total_tickets = len(tickets)
+    total_machines = len(machines)
+
+    # Avg hours to fix (closed tickets only)
+    closed_tickets = [t for t in tickets if t.get("status") == "Closed"]
+    if closed_tickets:
+        hours_sum = 0
+        count = 0
+        for t in closed_tickets:
+            if t.get("hours_to_fix"):
+                try:
+                    hours_sum += float(t["hours_to_fix"])
+                    count += 1
+                except (ValueError, TypeError):
+                    pass
+        avg_hours = hours_sum / count if count > 0 else 0
+    else:
+        avg_hours = 0
+
+    # Plant health %
+    plant_health = 100 if total_machines == 0 else int((total_machines - machines_down) / total_machines * 100)
+
+    # Recent activity (last 5 tickets, most recent first)
+    recent = sorted(
+        [{"ticket_id": t.get("ticket_id"), "machine_id": t.get("machine_id"),
+          "machine_name": t.get("machine_name"), "status": t.get("status"),
+          "urgency": t.get("urgency"), "reported_at": t.get("reported_at")}
+         for t in tickets],
+        key=lambda x: x.get("reported_at") or "2000-01-01",
+        reverse=True
+    )[:5]
+
+    return {
+        "company_code": company_code,
+        "company_name": company_name,
+        "kpis": {
+            "open_tickets": open_tickets,
+            "machines_down": machines_down,
+            "closed_today": closed_today,
+            "total_tickets": total_tickets,
+            "avg_hours_to_fix": round(avg_hours, 1),
+            "plant_health_pct": plant_health,
+            "total_machines": total_machines,
+        },
+        "recent_activity": recent,
+    }
+
+
+@router.get("/vault/dashboard")
+def get_dashboard(user: CurrentUser = Depends(get_current_user)):
+    """Get live KPI dashboard for the user's company."""
+    company = users_store.get_company(user.company_code)
+    if not company:
+        raise HTTPException(status_code=404, detail="company not found")
+    return _compute_kpis(user.company_code, company.get("company_name", ""))
+
+
+# ---------------------------------------------------------------------------
 # Machines (read-only lookup so the UI can populate a per-machine picker)
 # ---------------------------------------------------------------------------
 

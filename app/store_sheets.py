@@ -151,3 +151,17 @@ def update_ai_fields(ticket_id: str, ai_summary: str, urgency: str, description:
 
 def next_ticket_id() -> str:
     return f"T{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{secrets.token_hex(2)}"
+
+
+def get_company_machines(company_code: str):
+    """Get all machines for a company."""
+    ws = _spreadsheet().worksheet("Machines")
+    all_rows = ws.get_all_records()
+    return [r for r in all_rows if r.get("company_code") == company_code]
+
+
+def get_company_tickets(company_code: str):
+    """Get all tickets for a company."""
+    ws = _spreadsheet().worksheet("Tickets")
+    all_rows = ws.get_all_records()
+    return [r for r in all_rows if r.get("company_code") == company_code]
