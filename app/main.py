@@ -33,6 +33,12 @@ app = FastAPI(
 )
 app.include_router(vault_router)
 
+
+@app.get("/health")
+def health():
+    """Health check endpoint for container orchestration / load balancers."""
+    return {"status": "ok"}
+
 # Phase 5 (Document Vault) is called directly from the static demo-site's vault.html
 # (a different origin from this API) - the WhatsApp webhook itself has no browser
 # caller, so this is scoped to what the vault UI actually needs.
