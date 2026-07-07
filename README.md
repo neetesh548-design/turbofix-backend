@@ -105,7 +105,26 @@ WhatsApp never touch this; it's a completely separate login.
 - **`POST /auth/login`** — `{identifier, password}` (identifier is phone or email) →
   a JWT (`JWT_SECRET_KEY`/`JWT_EXPIRE_MINUTES` in `.env`, default 8h) carrying the
   user's `company_code` and `role`. Passwords are bcrypt-hashed in the `Users` tab.
+- **`POST /auth/signup`** — public, self-service, **supervisor (read-only) accounts
+  only**. Requires `company_code` *and* that company's `admin_contact_phone` (from
+  the `Companies` tab) as a shared secret — company codes alone are printed in
+  plaintext on every QR tag, so they aren't a real credential. A `role` field in the
+  request body is ignored; the created account is always `supervisor`. Owner and
+  maintenance_head logins (full write access) still require an admin running
+  `scripts/create_user.py`. Returns the same `{access_token, user}` shape as login,
+  so a successful signup logs the person straight in. `app/users_store.py` now has
+  the same `local`/`sheets` pluggable split as `app/store.py`
+  (`users_store_local.py`/`users_store_sheets.py`), so signups work against a live
+  Google Sheet in production, not just the local `.xlsx`.
 - **`GET /vault/machines`** — the caller's company's machines, for populating a picker.
+- **`POST /vault/machines`** — owner/maintenance_head only. Self-service onboarding:
+  supply `machine_name`/`location`/`assigned_technician_phone`/`informed_phone_*`,
+  the backend generates the `machine_id` (`TF-{companyCode}-M{nnn}`, auto-incremented
+  per company) and returns a ready-to-use `wa_link` (built from
+  `WHATSAPP_DISPLAY_NUMBER`, `null` if that env var isn't set) for the Vault UI to
+  render as a printable QR tag. Invalidates the Machines-tab cache on write, so the
+  new machine is recognized by the webhook immediately rather than after
+  `MACHINES_CACHE_TTL_SECONDS`.
 - **Documents** (`GET/POST /vault/documents`, `GET /vault/documents/{id}/download`,
   `DELETE /vault/documents/{id}`) — `category` is one of `manual`, `circuit_diagram`,
   `hydraulic_diagram`, `spare_parts_catalog`, `other`. Upload is `multipart/form-data`

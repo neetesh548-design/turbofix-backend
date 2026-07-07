@@ -11,13 +11,14 @@ in main.py so there's still only one process to run/deploy.
 import mimetypes
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from app import documents_store, file_storage, parts_store, store, users_store
-from app.auth import CurrentUser, create_access_token, get_current_user, verify_password
+from app import config, documents_store, file_storage, parts_store, store, users_store
+from app.auth import CurrentUser, Role, create_access_token, get_current_user, hash_password, verify_password
 
 router = APIRouter()
 
@@ -51,6 +52,63 @@ def login(body: LoginRequest):
     }
 
 
+class SignupRequest(BaseModel):
+    company_code: str
+    admin_contact_phone: str
+    name: str
+    phone: str = ""
+    email: str = ""
+    password: str
+
+
+@router.post("/auth/signup", status_code=201)
+def signup(body: SignupRequest):
+    """Self-service signup - can only ever create a supervisor (read-only) account.
+    Owner/maintenance_head logins (full write access) still require an admin running
+    scripts/create_user.py. company_code alone isn't a real secret (it's printed in
+    plaintext on every QR tag), so this also requires the company's
+    admin_contact_phone as a shared secret before creating an account under it."""
+    if not body.phone and not body.email:
+        raise HTTPException(status_code=400, detail="phone or email is required")
+    if len(body.password) < 8:
+        raise HTTPException(status_code=400, detail="password must be at least 8 characters")
+
+    company = users_store.get_company(body.company_code)
+    if company is None or (company.get("admin_contact_phone") or "").strip() != body.admin_contact_phone.strip():
+        # Same generic error whether the company doesn't exist or the phone doesn't
+        # match - don't reveal which, same "don't leak" philosophy as /auth/login.
+        raise HTTPException(status_code=401, detail="company code or admin contact phone is incorrect")
+
+    if (body.phone and users_store.get_user_by_identifier(body.phone)) or (
+        body.email and users_store.get_user_by_identifier(body.email)
+    ):
+        raise HTTPException(status_code=409, detail="an account with this phone or email already exists")
+
+    user_id = users_store.next_user_id(body.company_code)
+    users_store.add_user({
+        "user_id": user_id,
+        "company_code": body.company_code,
+        "name": body.name,
+        "phone": body.phone,
+        "email": body.email,
+        "role": Role.SUPERVISOR.value,  # self-signup can only ever create a read-only account
+        "password_hash": hash_password(body.password),
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    })
+
+    token = create_access_token(user_id=user_id, company_code=body.company_code, role=Role.SUPERVISOR.value)
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "user_id": user_id,
+            "name": body.name,
+            "role": Role.SUPERVISOR.value,
+            "company_code": body.company_code,
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Machines (read-only lookup so the UI can populate a per-machine picker)
 # ---------------------------------------------------------------------------
@@ -63,6 +121,34 @@ def list_machines(user: CurrentUser = Depends(get_current_user)):
         for machine_id, machine in machines.items()
         if machine["company_code"] == user.company_code
     ]
+
+
+class MachineIn(BaseModel):
+    machine_name: str
+    location: str = ""
+    assigned_technician_phone: str
+    informed_phone_1: str = ""
+    informed_phone_2: str = ""
+    informed_phone_3: str = ""
+
+
+@router.post("/vault/machines", status_code=201)
+def create_machine(body: MachineIn, user: CurrentUser = Depends(get_current_user)):
+    """Self-service machine onboarding: caller supplies name/location/technician, we
+    generate the machine_id (TF-{companyCode}-M{nnn}) and a ready-to-print wa.me QR
+    link, so a non-technical owner/maintenance_head never touches the tracker/Sheet
+    directly."""
+    user.assert_can_write()
+    machine_code = store.next_machine_code(user.company_code)
+    machine_id = f"TF-{user.company_code}-{machine_code}"
+    row = {"machine_id": machine_id, "company_code": user.company_code, **body.model_dump()}
+    store.create_machine(row)
+
+    wa_link = None
+    if config.WHATSAPP_DISPLAY_NUMBER:
+        text = quote(f"Issue with {machine_id}: ")
+        wa_link = f"https://wa.me/{config.WHATSAPP_DISPLAY_NUMBER}?text={text}"
+    return {**row, "wa_link": wa_link}
 
 
 def _get_machine_in_company(machine_id: str, user: CurrentUser) -> dict:

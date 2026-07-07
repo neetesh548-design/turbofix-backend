@@ -1,3 +1,4 @@
+import re
 import secrets
 import time
 from datetime import datetime, timezone
@@ -15,6 +16,10 @@ _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 # read rather than hitting the Sheets API on every incoming message.
 _machines_cache: Optional[Dict[str, dict]] = None
 _machines_cache_at: float = 0.0
+
+_MACHINES_HEADER = ["machine_id", "company_code", "machine_name", "location",
+                     "assigned_technician_phone", "informed_phone_1", "informed_phone_2",
+                     "informed_phone_3", "has_open_tickets"]
 
 _TICKETS_HEADER = ["ticket_id", "machine_id", "company_code", "machine_name", "reported_at",
                     "reporter_phone", "description", "ai_summary", "urgency", "status",
@@ -64,6 +69,47 @@ def load_machines() -> Dict[str, dict]:
 
 def get_machine(machine_id: str) -> Optional[dict]:
     return load_machines().get(machine_id.upper())
+
+
+def invalidate_machines_cache() -> None:
+    """Forces the next load_machines() call to re-read the Sheet instead of returning
+    a cached copy - used right after create_machine() so a machine added via the
+    Vault UI is immediately visible to the webhook, without waiting out
+    MACHINES_CACHE_TTL_SECONDS."""
+    global _machines_cache, _machines_cache_at
+    _machines_cache = None
+    _machines_cache_at = 0.0
+
+
+def next_machine_code(company_code: str) -> str:
+    """Returns the next Mnnn code for a company, e.g. "M003" if M001/M002 already
+    exist. Forces a fresh read since this is called rarely - on machine creation,
+    not the message-handling hot path - and correctness matters more here than
+    avoiding a re-read."""
+    invalidate_machines_cache()
+    pattern = re.compile(rf"^TF-{re.escape(company_code)}-M(\d+)$", re.IGNORECASE)
+    max_n = 0
+    for machine_id in load_machines():
+        match = pattern.match(machine_id)
+        if match:
+            max_n = max(max_n, int(match.group(1)))
+    return f"M{max_n + 1:03d}"
+
+
+def create_machine(row: dict) -> None:
+    """row keys: machine_id, company_code, machine_name, location,
+    assigned_technician_phone, informed_phone_1, informed_phone_2, informed_phone_3.
+    has_open_tickets is appended as a live formula (USER_ENTERED) so "Machines Down"
+    keeps working for machines added outside build_tracker.py."""
+    ws = _spreadsheet().worksheet("Machines")
+    data_cols = _MACHINES_HEADER[:-1]
+    ws.append_row([row.get(col, "") for col in data_cols], value_input_option="USER_ENTERED")
+    row_num = len(ws.get_all_values())
+    ws.update_cell(
+        row_num, len(_MACHINES_HEADER),
+        f'=COUNTIFS(Tickets!$B:$B,A{row_num},Tickets!$J:$J,"Open")',
+    )
+    invalidate_machines_cache()
 
 
 def append_ticket(row: dict) -> None:

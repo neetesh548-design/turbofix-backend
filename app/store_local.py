@@ -1,3 +1,4 @@
+import re
 import secrets
 import threading
 import time
@@ -67,6 +68,51 @@ def load_machines() -> Dict[str, dict]:
 
 def get_machine(machine_id: str) -> Optional[dict]:
     return load_machines().get(machine_id.upper())
+
+
+def invalidate_machines_cache() -> None:
+    """Forces the next load_machines() call to re-read the tracker instead of
+    returning a cached copy - used right after create_machine() so a machine
+    added via the Vault UI is immediately visible to the webhook, without
+    waiting out MACHINES_CACHE_TTL_SECONDS."""
+    global _machines_cache, _machines_cache_key, _machines_cache_at
+    _machines_cache = None
+    _machines_cache_key = None
+    _machines_cache_at = 0.0
+
+
+def next_machine_code(company_code: str) -> str:
+    """Returns the next Mnnn code for a company, e.g. "M003" if M001/M002 already
+    exist. Forces a fresh read (not the cache) since this is called rarely - on
+    machine creation, not the message-handling hot path - and correctness here
+    matters more than avoiding a re-read."""
+    invalidate_machines_cache()
+    pattern = re.compile(rf"^TF-{re.escape(company_code)}-M(\d+)$", re.IGNORECASE)
+    max_n = 0
+    for machine_id in load_machines():
+        match = pattern.match(machine_id)
+        if match:
+            max_n = max(max_n, int(match.group(1)))
+    return f"M{max_n + 1:03d}"
+
+
+def create_machine(row: dict) -> None:
+    """row keys: machine_id, company_code, machine_name, location,
+    assigned_technician_phone, informed_phone_1, informed_phone_2, informed_phone_3.
+    has_open_tickets is a formula column (see build_tracker.py) - set here the same
+    way so "Machines Down" keeps working for machines added outside build_tracker.py."""
+    data_cols = _MACHINES_HEADER[:-1]
+    with _lock:
+        wb = openpyxl.load_workbook(config.TRACKER_XLSX_PATH)
+        ws = wb["Machines"]
+        ws.append([row.get(col, "") for col in data_cols])
+        row_num = ws.max_row
+        ws.cell(
+            row=row_num, column=len(_MACHINES_HEADER),
+            value=f'=COUNTIFS(Tickets!$B:$B,A{row_num},Tickets!$J:$J,"Open")',
+        )
+        wb.save(config.TRACKER_XLSX_PATH)
+    invalidate_machines_cache()
 
 
 def append_ticket(row: dict) -> None:

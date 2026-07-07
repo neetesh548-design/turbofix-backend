@@ -25,6 +25,11 @@ WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v20.0")
 # The Cloud API "from" number fan-out sends as (Meta phone_number_id, not the raw number).
 WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 
+# The human-dialable TurboFix WhatsApp number (no "+", no spaces, e.g. "919900012345") -
+# distinct from WHATSAPP_PHONE_NUMBER_ID above. Used to build the wa.me QR link returned
+# by POST /vault/machines. Blank by default; the vault UI degrades gracefully without it.
+WHATSAPP_DISPLAY_NUMBER = os.getenv("WHATSAPP_DISPLAY_NUMBER", "")
+
 # Phase 3 fan-out: technician/informed users haven't messaged TurboFix themselves, so
 # Meta requires a pre-approved message template (not free-form text) to reach them
 # outside the 24h customer service window. This name/language must match a template
