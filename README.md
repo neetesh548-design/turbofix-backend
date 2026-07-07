@@ -1,4 +1,4 @@
-# TurboFix Backend — Phase 1+2+3+4 (receive, log, transcribe, summarize, fan-out & harden)
+# TurboFix Backend — Phase 1+2+3+4+5 (receive, log, transcribe, summarize, fan-out, harden & document vault)
 
 FastAPI webhook that receives WhatsApp messages, parses the machine ID out of the
 pre-filled QR message, logs a ticket row, transcribes/summarizes any voice note into a
@@ -94,6 +94,54 @@ under real WhatsApp traffic:
   machine's assignment can take up to that long to take effect — an acceptable
   trade-off at pilot scale, called out explicitly rather than silently assumed.
 
+## Phase 5 — Document Vault (manuals, diagrams, BOM, consumables)
+
+A separate, authenticated API surface (`app/vault_router.py`, mounted alongside the
+anonymous WhatsApp webhook) for the small group of staff — **owner, supervisor,
+maintenance_head** — who maintain each machine's manual, circuit/hydraulic diagrams,
+spare-parts catalog, BOM, and consumables list. Workers reporting a fault over
+WhatsApp never touch this; it's a completely separate login.
+
+- **`POST /auth/login`** — `{identifier, password}` (identifier is phone or email) →
+  a JWT (`JWT_SECRET_KEY`/`JWT_EXPIRE_MINUTES` in `.env`, default 8h) carrying the
+  user's `company_code` and `role`. Passwords are bcrypt-hashed in the `Users` tab.
+- **`GET /vault/machines`** — the caller's company's machines, for populating a picker.
+- **Documents** (`GET/POST /vault/documents`, `GET /vault/documents/{id}/download`,
+  `DELETE /vault/documents/{id}`) — `category` is one of `manual`, `circuit_diagram`,
+  `hydraulic_diagram`, `spare_parts_catalog`, `other`. Upload is `multipart/form-data`
+  (`machine_id`, `category`, `title`, `file`); allowed types/size are
+  `ALLOWED_DOCUMENT_EXTENSIONS`/`MAX_DOCUMENT_SIZE_MB` in `.env`. File bytes are
+  stored via `app/file_storage.py` (`DOCUMENT_STORE=local`, the default, writes under
+  `DOCUMENT_STORE_DIR`; `DOCUMENT_STORE=gcs` uploads to a Google Cloud Storage bucket —
+  written but never exercised against a real bucket, same status as `store_sheets.py`).
+- **Spare parts / BOM** (`GET/POST /vault/spare-parts`, `PATCH`/`DELETE .../{part_id}`)
+  and **consumables** (same shape at `/vault/consumables`) — simple per-machine
+  inventories (`quantity_on_hand`, `unit`, `reorder_level`, ...).
+- **Roles:** `owner` and `maintenance_head` can create/edit/delete; `supervisor` is
+  read-only (`app/auth.py`'s `WRITE_ROLES`) — matches how supervisors are described
+  elsewhere in the product, as informed users rather than machine owners. Every
+  endpoint also enforces the same multi-tenant isolation as tickets/machines: a user
+  can only ever see or touch their own `company_code`'s data (a cross-company
+  request 404s, not 403s, so company existence isn't leaked either).
+- **Creating a login is a deliberate admin action**, not self-serve — there's no
+  signup endpoint, only `scripts/create_user.py`:
+  ```bash
+  .venv/bin/python scripts/create_user.py --company-code ACME3 --name "New Hire" \
+    --phone +919800000000 --role maintenance_head
+  ```
+- **Staff portal UI:** `../demo-site/vault.html` (+ `assets/vault.js`/`vault.css`) is a
+  small static page — login form, per-machine document/BOM/consumables browser —
+  that calls this API directly from the browser. It's part of the demo-site's static
+  build (no server-side rendering), so CORS is enabled on this API
+  (`VAULT_CORS_ORIGINS` in `.env`, defaults to `*` since auth here is a Bearer JWT,
+  not a cookie, so there's no CSRF/credential-leak exposure from a wide origin list —
+  tighten to an explicit allowlist for a real deployment). Point the page's
+  "Advanced: backend URL" field at wherever this API actually runs.
+- **Sample logins** (seeded by `build_tracker.py`, demo passwords, rotate before real
+  data goes in): `rakesh@acmeforge.example` / `AcmeOwner@2026` (ACME3 owner),
+  `vikram@acmeforge.example` / `AcmeMaint@2026` (ACME3 maintenance_head),
+  `sunil@acmeforge.example` / `AcmeSuper@2026` (ACME3 supervisor, read-only).
+
 ## Running locally (no credentials needed)
 
 By default `TICKET_STORE=local`, which reads/writes directly to
@@ -184,3 +232,9 @@ template sends for unapproved names, and approval can take up to 24h.
 - Machine lookups are cached for `MACHINES_CACHE_TTL_SECONDS` (default 60s), so a
   change to a machine's assigned technician/informed users can take up to that long to
   take effect.
+- The Document Vault's `DOCUMENT_STORE=gcs` path (`app/file_storage.py`) is written but
+  has never run against a real Google Cloud Storage bucket — same unverified status as
+  `store_sheets.py`. `DOCUMENT_STORE=local` (the default) is what's actually been tested.
+- `VAULT_CORS_ORIGINS` defaults to `*` (any origin can call the vault API, given a
+  valid bearer token) — fine for a pilot/demo, but worth tightening to the real
+  deployed staff-portal origin before this holds real customer documents.

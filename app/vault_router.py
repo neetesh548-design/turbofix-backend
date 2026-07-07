@@ -1,0 +1,274 @@
+"""Phase 5 - Document Vault HTTP surface.
+
+Everything WhatsApp-facing (webhook, tickets, fan-out) lives in main.py and is
+anonymous by design - a worker reporting a fault never logs in. This router is the
+opposite: a small set of authenticated endpoints for the handful of staff
+(owner/supervisor/maintenance_head) who maintain machine manuals, circuit/hydraulic
+diagrams, spare-parts (BOM), and consumables lists. Mounted onto the same FastAPI app
+in main.py so there's still only one process to run/deploy.
+"""
+
+import mimetypes
+from datetime import datetime, timezone
+from typing import Optional
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
+from pydantic import BaseModel
+
+from app import documents_store, file_storage, parts_store, store, users_store
+from app.auth import CurrentUser, create_access_token, get_current_user, verify_password
+
+router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+
+class LoginRequest(BaseModel):
+    identifier: str  # phone or email
+    password: str
+
+
+@router.post("/auth/login")
+def login(body: LoginRequest):
+    user = users_store.get_user_by_identifier(body.identifier)
+    if user is None or not verify_password(body.password, user.get("password_hash", "")):
+        # Same error for "no such user" and "wrong password" - don't reveal which.
+        raise HTTPException(status_code=401, detail="invalid credentials")
+
+    token = create_access_token(user_id=user["user_id"], company_code=user["company_code"], role=user["role"])
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "user_id": user["user_id"],
+            "name": user["name"],
+            "role": user["role"],
+            "company_code": user["company_code"],
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Machines (read-only lookup so the UI can populate a per-machine picker)
+# ---------------------------------------------------------------------------
+
+@router.get("/vault/machines")
+def list_machines(user: CurrentUser = Depends(get_current_user)):
+    machines = store.load_machines()
+    return [
+        {"machine_id": machine_id, **machine}
+        for machine_id, machine in machines.items()
+        if machine["company_code"] == user.company_code
+    ]
+
+
+def _get_machine_in_company(machine_id: str, user: CurrentUser) -> dict:
+    machine = store.get_machine(machine_id)
+    if machine is None or machine["company_code"] != user.company_code:
+        raise HTTPException(status_code=404, detail="machine not found")
+    return machine
+
+
+# ---------------------------------------------------------------------------
+# Documents (manuals, circuit/hydraulic diagrams, spare-parts catalogs, ...)
+# ---------------------------------------------------------------------------
+
+@router.get("/vault/documents")
+def list_documents(machine_id: Optional[str] = None, user: CurrentUser = Depends(get_current_user)):
+    return documents_store.list_documents(user.company_code, machine_id)
+
+
+@router.post("/vault/documents", status_code=201)
+async def upload_document(
+    machine_id: str = Form(...),
+    category: str = Form(...),
+    title: str = Form(...),
+    file: UploadFile = File(...),
+    user: CurrentUser = Depends(get_current_user),
+):
+    user.assert_can_write()
+    if category not in documents_store.DOCUMENT_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"category must be one of {documents_store.DOCUMENT_CATEGORIES}",
+        )
+    _get_machine_in_company(machine_id, user)
+
+    content = await file.read()
+    try:
+        file_storage.validate_upload(file.filename, len(content))
+    except file_storage.UnsupportedFileTypeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except file_storage.FileTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc))
+
+    document_id = documents_store.next_document_id()
+    storage_path = file_storage.save_file(user.company_code, machine_id, document_id, file.filename, content)
+    row = {
+        "document_id": document_id,
+        "company_code": user.company_code,
+        "machine_id": machine_id,
+        "category": category,
+        "title": title,
+        "file_name": file.filename,
+        "storage_path": storage_path,
+        "uploaded_by": user.user_id,
+        "uploaded_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
+    }
+    documents_store.add_document(row)
+    return row
+
+
+@router.get("/vault/documents/{document_id}/download")
+def download_document(document_id: str, user: CurrentUser = Depends(get_current_user)):
+    doc = documents_store.get_document(document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="not found")
+    user.assert_same_company(doc["company_code"])
+
+    content = file_storage.read_file(doc["storage_path"])
+    media_type = mimetypes.guess_type(doc["file_name"])[0] or "application/octet-stream"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{doc["file_name"]}"'},
+    )
+
+
+@router.delete("/vault/documents/{document_id}", status_code=204)
+def delete_document(document_id: str, user: CurrentUser = Depends(get_current_user)):
+    doc = documents_store.get_document(document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="not found")
+    user.assert_same_company(doc["company_code"])
+    user.assert_can_write()
+
+    file_storage.delete_file(doc["storage_path"])
+    documents_store.delete_document(document_id)
+    return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Spare parts (BOM) + Consumables - same shape (see app/parts_store.py), so the
+# two route groups below are thin and near-identical by design.
+# ---------------------------------------------------------------------------
+
+class SparePartIn(BaseModel):
+    machine_id: str
+    part_name: str
+    part_number: str = ""
+    quantity_on_hand: float = 0
+    unit: str = ""
+    reorder_level: float = 0
+    supplier: str = ""
+    notes: str = ""
+
+
+class SparePartUpdate(BaseModel):
+    part_name: Optional[str] = None
+    part_number: Optional[str] = None
+    quantity_on_hand: Optional[float] = None
+    unit: Optional[str] = None
+    reorder_level: Optional[float] = None
+    supplier: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ConsumableIn(BaseModel):
+    machine_id: str
+    name: str
+    quantity_on_hand: float = 0
+    unit: str = ""
+    reorder_level: float = 0
+    notes: str = ""
+
+
+class ConsumableUpdate(BaseModel):
+    name: Optional[str] = None
+    quantity_on_hand: Optional[float] = None
+    unit: Optional[str] = None
+    reorder_level: Optional[float] = None
+    notes: Optional[str] = None
+
+
+@router.get("/vault/spare-parts")
+def list_spare_parts(machine_id: Optional[str] = None, user: CurrentUser = Depends(get_current_user)):
+    return parts_store.list_items("spare_parts", user.company_code, machine_id)
+
+
+@router.post("/vault/spare-parts", status_code=201)
+def create_spare_part(body: SparePartIn, user: CurrentUser = Depends(get_current_user)):
+    user.assert_can_write()
+    _get_machine_in_company(body.machine_id, user)
+    part_id = parts_store.next_item_id("spare_parts")
+    row = {"part_id": part_id, "company_code": user.company_code, **body.model_dump()}
+    parts_store.add_item("spare_parts", row)
+    return row
+
+
+@router.patch("/vault/spare-parts/{part_id}")
+def update_spare_part(part_id: str, body: SparePartUpdate, user: CurrentUser = Depends(get_current_user)):
+    item = parts_store.get_item("spare_parts", part_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="not found")
+    user.assert_same_company(item["company_code"])
+    user.assert_can_write()
+
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    parts_store.update_item("spare_parts", part_id, updates)
+    return parts_store.get_item("spare_parts", part_id)
+
+
+@router.delete("/vault/spare-parts/{part_id}", status_code=204)
+def delete_spare_part(part_id: str, user: CurrentUser = Depends(get_current_user)):
+    item = parts_store.get_item("spare_parts", part_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="not found")
+    user.assert_same_company(item["company_code"])
+    user.assert_can_write()
+
+    parts_store.delete_item("spare_parts", part_id)
+    return Response(status_code=204)
+
+
+@router.get("/vault/consumables")
+def list_consumables(machine_id: Optional[str] = None, user: CurrentUser = Depends(get_current_user)):
+    return parts_store.list_items("consumables", user.company_code, machine_id)
+
+
+@router.post("/vault/consumables", status_code=201)
+def create_consumable(body: ConsumableIn, user: CurrentUser = Depends(get_current_user)):
+    user.assert_can_write()
+    _get_machine_in_company(body.machine_id, user)
+    consumable_id = parts_store.next_item_id("consumables")
+    row = {"consumable_id": consumable_id, "company_code": user.company_code, **body.model_dump()}
+    parts_store.add_item("consumables", row)
+    return row
+
+
+@router.patch("/vault/consumables/{consumable_id}")
+def update_consumable(consumable_id: str, body: ConsumableUpdate, user: CurrentUser = Depends(get_current_user)):
+    item = parts_store.get_item("consumables", consumable_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="not found")
+    user.assert_same_company(item["company_code"])
+    user.assert_can_write()
+
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    parts_store.update_item("consumables", consumable_id, updates)
+    return parts_store.get_item("consumables", consumable_id)
+
+
+@router.delete("/vault/consumables/{consumable_id}", status_code=204)
+def delete_consumable(consumable_id: str, user: CurrentUser = Depends(get_current_user)):
+    item = parts_store.get_item("consumables", consumable_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="not found")
+    user.assert_same_company(item["company_code"])
+    user.assert_can_write()
+
+    parts_store.delete_item("consumables", consumable_id)
+    return Response(status_code=204)

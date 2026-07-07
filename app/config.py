@@ -54,3 +54,30 @@ MACHINES_CACHE_TTL_SECONDS = int(os.getenv("MACHINES_CACHE_TTL_SECONDS", "60"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
 OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4.1-nano")
+
+# Phase 5 - Document Vault (manuals/diagrams/BOM/consumables) with role-based access
+# for owner/supervisor/maintenance_head. Dev default is an obviously-insecure secret
+# so a real deployment is forced to set its own via the environment.
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-insecure-secret-change-in-production")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "480"))  # a work-shift default
+
+# "local" (default) saves uploaded files to disk under DOCUMENT_STORE_DIR - no
+# credentials needed. "gcs" uploads to a Google Cloud Storage bucket via the same
+# service-account file already used for GOOGLE_SERVICE_ACCOUNT_FILE above.
+DOCUMENT_STORE = os.getenv("DOCUMENT_STORE", "local")
+DOCUMENT_STORE_DIR = Path(os.getenv("DOCUMENT_STORE_DIR", str(BACKEND_DIR / "document_store")))
+DOCUMENT_STORE_DIR.mkdir(parents=True, exist_ok=True)
+GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "")
+
+MAX_DOCUMENT_SIZE_MB = int(os.getenv("MAX_DOCUMENT_SIZE_MB", "25"))
+ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".dwg", ".dxf", ".xlsx", ".csv"}
+
+# Origins allowed to call the vault API from a browser (the demo-site vault.html
+# staff portal runs on a different origin than this backend, often on a
+# random/auto-picked local dev port). Auth here is a Bearer JWT, not a cookie, so a
+# wildcard origin doesn't carry the usual CSRF/credential-leak risk - tighten this to
+# a comma-separated allowlist (e.g. the deployed GitHub Pages URL) for production.
+VAULT_CORS_ORIGINS = [
+    o.strip() for o in os.getenv("VAULT_CORS_ORIGINS", "*").split(",") if o.strip()
+]

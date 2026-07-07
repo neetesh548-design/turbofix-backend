@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import BackgroundTasks, FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 
 from app import config, store, whatsapp_client
 from app.ai.summarize import summarize_issue
@@ -11,6 +12,7 @@ from app.ai.transcribe import transcribe_audio
 from app.fanout import notify_ticket
 from app.parser import parse_message
 from app.sessions import Session, SessionStore
+from app.vault_router import router as vault_router
 
 logger = logging.getLogger("turbofix")
 sessions = SessionStore()
@@ -28,6 +30,18 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(
     title="TurboFix Webhook — Phase 1+2+3+4 (receive, log, transcribe, summarize, fan-out & harden)",
     lifespan=_lifespan,
+)
+app.include_router(vault_router)
+
+# Phase 5 (Document Vault) is called directly from the static demo-site's vault.html
+# (a different origin from this API) - the WhatsApp webhook itself has no browser
+# caller, so this is scoped to what the vault UI actually needs.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=config.VAULT_CORS_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 _PLACEHOLDER_DESCRIPTION = "(no description provided)"

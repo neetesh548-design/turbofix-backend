@@ -8,3 +8,9 @@ google-auth>=2.30
 pytest>=8.2
 
 # Phase 2 AI layer uses the raw OpenAI HTTP API directly via httpx (no SDK dependency).
+
+# Phase 5 (Document Vault) - JWT auth + password hashing for owner/supervisor/
+# maintenance_head logins, and multipart form parsing for document uploads.
+PyJWT>=2.8
+bcrypt>=4.1
+python-multipart>=0.0.9

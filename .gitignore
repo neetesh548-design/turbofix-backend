@@ -4,4 +4,6 @@ __pycache__/
 .env
 media_store/*
 !media_store/.gitkeep
+document_store/*
+!document_store/.gitkeep
 .pytest_cache/
