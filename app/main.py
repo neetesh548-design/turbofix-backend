@@ -7,8 +7,7 @@ from fastapi import BackgroundTasks, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import config, store, whatsapp_client
-from app.ai.summarize import summarize_issue
-from app.ai.transcribe import transcribe_audio
+from app.ai import provider as ai
 from app.fanout import notify_ticket
 from app.parser import parse_message
 from app.sessions import Session, SessionStore
@@ -63,11 +62,11 @@ async def _summarize_and_store(ticket_id: str, description: str, new_description
     """Runs the AI summary for a ticket and writes it back. Any failure (missing
     API key, network error, bad response) is logged and swallowed - a ticket must
     never fail to log just because the AI layer is unavailable."""
-    if not config.OPENAI_API_KEY:
-        logger.info("OPENAI_API_KEY not set, skipping AI summary for ticket %s", ticket_id)
+    if not ai.enabled():
+        logger.info("no AI provider configured (set GEMINI_API_KEY or OPENAI_API_KEY), skipping AI summary for ticket %s", ticket_id)
         return
     try:
-        brief = await summarize_issue(description)
+        brief = await ai.summarize_issue(description)
         store.update_ai_fields(
             ticket_id,
             ai_summary=brief.as_ai_summary(),
@@ -165,12 +164,12 @@ async def _handle_text_message(phone: str, text: str, background_tasks: Backgrou
 async def _finish_audio_ticket(phone: str, session: Session, media_id: str) -> None:
     """The slow tail of a voice-note-triggered ticket (transcribe, summarize,
     fan-out), run as a background task for the same reason as `_finish_text_ticket`."""
-    if not config.OPENAI_API_KEY:
-        logger.info("OPENAI_API_KEY not set, skipping transcription for ticket %s", session.ticket_id)
+    if not ai.enabled():
+        logger.info("no AI provider configured (set GEMINI_API_KEY or OPENAI_API_KEY), skipping transcription for ticket %s", session.ticket_id)
     else:
         try:
             local_path = await whatsapp_client.download_media(media_id)
-            transcript = await transcribe_audio(local_path)
+            transcript = await ai.transcribe_audio(local_path)
         except Exception:
             logger.exception("transcription failed for ticket %s, leaving description as-is", session.ticket_id)
         else:

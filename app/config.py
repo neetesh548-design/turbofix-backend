@@ -55,7 +55,17 @@ SESSION_SWEEP_INTERVAL_SECONDS = int(os.getenv("SESSION_SWEEP_INTERVAL_SECONDS",
 MACHINES_CACHE_TTL_SECONDS = int(os.getenv("MACHINES_CACHE_TTL_SECONDS", "60"))
 
 # AI layer (Phase 2): transcription + structured-brief summarization.
-# Model names match the ones already priced out in progress.md's cost model.
+# Two interchangeable providers:
+#   - "gemini" — Google Gemini, which handles both audio transcription and JSON
+#     summarization natively and has a free tier (the demo/pilot default: zero cost).
+#   - "openai" — the original paid path, models priced out in progress.md's cost model.
+# "auto" (default) picks Gemini if GEMINI_API_KEY is set, else OpenAI if
+# OPENAI_API_KEY is set, else the AI layer is skipped entirely (tickets still log).
+AI_PROVIDER = os.getenv("AI_PROVIDER", "auto")
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
 OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4.1-nano")

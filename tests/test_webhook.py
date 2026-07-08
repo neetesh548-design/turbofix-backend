@@ -149,7 +149,7 @@ def test_text_message_with_description_gets_ai_summary(client, monkeypatch):
         assert description == "spindle making loud noise"
         return _FakeBrief("worn bearing", "High", "inspect and replace bearing")
 
-    monkeypatch.setattr(main, "summarize_issue", fake_summarize_issue)
+    monkeypatch.setattr(main.ai, "summarize_issue", fake_summarize_issue)
 
     resp = test_client.post("/webhook", json=_text_payload(
         "919900012345", "Issue with TF-ACME3-M001: spindle making loud noise"
@@ -175,8 +175,8 @@ def test_voice_note_gets_transcribed_and_summarized(client, monkeypatch):
         assert description == "compressor tripping the breaker"
         return _FakeBrief("motor overload", "High", "have an electrician inspect it")
 
-    monkeypatch.setattr(main, "transcribe_audio", fake_transcribe_audio)
-    monkeypatch.setattr(main, "summarize_issue", fake_summarize_issue)
+    monkeypatch.setattr(main.ai, "transcribe_audio", fake_transcribe_audio)
+    monkeypatch.setattr(main.ai, "summarize_issue", fake_summarize_issue)
 
     # bare ID, no typed description -> placeholder, so the transcript should replace it
     test_client.post("/webhook", json=_text_payload("919900012345", "TF-ACME3-M001"))
@@ -199,7 +199,7 @@ def test_ai_failure_is_swallowed_and_ticket_stays_logged(client, monkeypatch):
     async def failing_summarize_issue(description):
         raise RuntimeError("simulated API outage")
 
-    monkeypatch.setattr(main, "summarize_issue", failing_summarize_issue)
+    monkeypatch.setattr(main.ai, "summarize_issue", failing_summarize_issue)
 
     resp = test_client.post("/webhook", json=_text_payload(
         "919900012345", "Issue with TF-ACME3-M001: spindle making loud noise"
@@ -211,9 +211,10 @@ def test_ai_failure_is_swallowed_and_ticket_stays_logged(client, monkeypatch):
     assert row[7] in ("", None)  # ai_summary left blank, not crashed
 
 
-def test_no_openai_key_skips_ai_but_still_logs_ticket(client, monkeypatch):
+def test_no_ai_keys_skips_ai_but_still_logs_ticket(client, monkeypatch):
     test_client, tracker_path = client
     monkeypatch.setattr(config, "OPENAI_API_KEY", "")
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "")
 
     resp = test_client.post("/webhook", json=_text_payload(
         "919900012345", "Issue with TF-ACME3-M001: spindle making loud noise"
@@ -335,7 +336,7 @@ def test_fanout_fires_even_when_transcription_fails(client, monkeypatch):
     async def fake_notify_ticket(machine, ticket):
         calls.append((machine, ticket))
 
-    monkeypatch.setattr(main, "transcribe_audio", failing_transcribe)
+    monkeypatch.setattr(main.ai, "transcribe_audio", failing_transcribe)
     monkeypatch.setattr(main, "notify_ticket", fake_notify_ticket)
 
     test_client.post("/webhook", json=_text_payload("919900012345", "TF-ACME3-M001"))
