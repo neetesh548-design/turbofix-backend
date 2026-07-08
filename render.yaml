@@ -1,0 +1,43 @@
+# Render Blueprint — one-click deploy of the TurboFix backend on the FREE tier.
+#
+# Setup (once): create a Render account, connect this repo, then "New > Blueprint".
+# Render reads this file and provisions the service. Two manual steps in the
+# dashboard afterwards:
+#   1. Fill in the env vars marked `sync: false` below (they're secrets).
+#   2. Add a Secret File named `service-account.json` with the Google service
+#      account key (GOOGLE_SERVICE_ACCOUNT_FILE below points at where Render
+#      mounts it).
+#
+# Free-tier note: the instance spins down after ~15 min idle and cold-starts in
+# ~30-60s on the next request. Fine for a demo; upgrade the plan for production.
+
+services:
+  - type: web
+    name: turbofix-backend
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: TICKET_STORE
+        value: sheets
+      - key: GOOGLE_SERVICE_ACCOUNT_FILE
+        value: /etc/secrets/service-account.json
+      - key: GOOGLE_SHEET_ID
+        sync: false
+      - key: AI_PROVIDER
+        value: auto
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      # WhatsApp (leave blank until Meta credentials exist — the backend degrades
+      # gracefully: tickets still log + summarize, fan-out is skipped)
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_DISPLAY_NUMBER
+        sync: false

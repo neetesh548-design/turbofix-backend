@@ -1,5 +1,18 @@
+import os
 import shutil
 from pathlib import Path
+
+# Tests always run against the local xlsx store with the AI layer and WhatsApp off,
+# regardless of what the developer's .env says — otherwise a .env pointed at the
+# live Google Sheet (Phase 3) would make the suite write test rows into live data
+# and fire real network calls. Must be set before any `app` import: the stores bind
+# their backend at import time from TICKET_STORE, and load_dotenv() does not
+# override variables that are already in the environment.
+os.environ["TICKET_STORE"] = "local"
+os.environ["GEMINI_API_KEY"] = ""
+os.environ["OPENAI_API_KEY"] = ""
+os.environ["WHATSAPP_ACCESS_TOKEN"] = ""
+os.environ["WHATSAPP_PHONE_NUMBER_ID"] = ""
 
 import pytest
 from fastapi.testclient import TestClient

@@ -68,8 +68,20 @@ def main() -> None:
             ws = spreadsheet.add_worksheet(
                 title=sheet_name, rows=max(len(rows) + 200, 400), cols=len(rows[0]) + 5
             )
-        ws.update(rows, value_input_option="USER_ENTERED")
-        print(f"  wrote tab '{sheet_name}' ({len(rows)} rows)")
+        # RAW keeps phone numbers and IDs as text (USER_ENTERED would coerce them to
+        # numbers, which breaks string comparisons in the sheets stores). Formulas
+        # are re-applied in a second pass below, since RAW would leave them as text.
+        ws.update(rows, value_input_option="RAW")
+
+        formula_cells = [
+            {"range": gspread.utils.rowcol_to_a1(r + 1, c + 1), "values": [[val]]}
+            for r, row_vals in enumerate(rows)
+            for c, val in enumerate(row_vals)
+            if isinstance(val, str) and val.startswith("=")
+        ]
+        if formula_cells:
+            ws.batch_update(formula_cells, value_input_option="USER_ENTERED")
+        print(f"  wrote tab '{sheet_name}' ({len(rows)} rows, {len(formula_cells)} formulas)")
 
     # drop gspread's default empty tab if it's still around
     for ws in spreadsheet.worksheets():

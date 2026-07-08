@@ -29,8 +29,10 @@ def next_user_id(company_code: str) -> str:
     return f"U-{company_code}-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{secrets.token_hex(2)}"
 
 
-def _normalize(value: Optional[str]) -> str:
-    return (value or "").strip().lower()
+def _normalize(value) -> str:
+    # get_all_records() returns numeric-looking cells (e.g. phone numbers) as ints,
+    # so coerce to str before normalizing.
+    return str(value).strip().lower() if value is not None else ""
 
 
 def get_user_by_identifier(identifier: str) -> Optional[dict]:
@@ -67,4 +69,5 @@ def add_user(row: dict) -> None:
     """row keys: user_id, company_code, name, phone, email, role, password_hash,
     created_at."""
     ws = _spreadsheet().worksheet("Users")
-    ws.append_row([row.get(col, "") for col in _USERS_HEADER], value_input_option="USER_ENTERED")
+    # RAW so phone numbers stay text instead of being coerced to numbers.
+    ws.append_row([row.get(col, "") for col in _USERS_HEADER], value_input_option="RAW")

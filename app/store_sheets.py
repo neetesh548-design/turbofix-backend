@@ -51,6 +51,8 @@ def load_machines() -> Dict[str, dict]:
         machine_id = str(record.get("machine_id", "")).strip().upper()
         if not machine_id:
             continue
+        # str() because get_all_records() returns numeric-looking cells (phone
+        # numbers) as ints.
         informed = [
             record.get("informed_phone_1"), record.get("informed_phone_2"), record.get("informed_phone_3"),
         ]
@@ -58,8 +60,8 @@ def load_machines() -> Dict[str, dict]:
             "company_code": record.get("company_code"),
             "machine_name": record.get("machine_name"),
             "location": record.get("location"),
-            "assigned_technician_phone": record.get("assigned_technician_phone"),
-            "informed_phones": [p for p in informed if p],
+            "assigned_technician_phone": str(record.get("assigned_technician_phone") or ""),
+            "informed_phones": [str(p) for p in informed if p],
         }
 
     _machines_cache = machines
@@ -103,7 +105,8 @@ def create_machine(row: dict) -> None:
     keeps working for machines added outside build_tracker.py."""
     ws = _spreadsheet().worksheet("Machines")
     data_cols = _MACHINES_HEADER[:-1]
-    ws.append_row([row.get(col, "") for col in data_cols], value_input_option="USER_ENTERED")
+    # RAW so phone numbers stay text instead of being coerced to numbers.
+    ws.append_row([row.get(col, "") for col in data_cols], value_input_option="RAW")
     row_num = len(ws.get_all_values())
     ws.update_cell(
         row_num, len(_MACHINES_HEADER),
@@ -114,7 +117,8 @@ def create_machine(row: dict) -> None:
 
 def append_ticket(row: dict) -> None:
     ws = _spreadsheet().worksheet("Tickets")
-    ws.append_row([row.get(col, "") for col in _TICKETS_HEADER], value_input_option="USER_ENTERED")
+    # RAW so the reporter's phone number stays text instead of becoming a number.
+    ws.append_row([row.get(col, "") for col in _TICKETS_HEADER], value_input_option="RAW")
 
 
 def attach_voice_note(ticket_id: str, media_id: str) -> bool:
