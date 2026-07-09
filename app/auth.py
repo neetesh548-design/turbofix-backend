@@ -7,6 +7,7 @@ worker reporting a fault) never authenticate - this is only for the small group 
 staff who need to log in and manage documentation.
 """
 
+import hashlib
 import time
 from enum import Enum
 from typing import Optional
@@ -64,6 +65,49 @@ def decode_access_token(token: str) -> Optional[dict]:
         return None
 
 
+# --- Password reset -------------------------------------------------------
+# The reset link carries a short-lived JWT instead of a random token stored in a
+# table. It's bound to a fingerprint of the user's *current* password hash, which
+# makes it self-invalidating with no server-side state: the moment the password
+# changes, the fingerprint no longer matches, so the used link (and any other
+# outstanding reset link for that user) stops working. "purpose" keeps a reset token
+# from ever being accepted as an access token, and vice versa.
+_RESET_PURPOSE = "pwreset"
+
+
+def _password_fingerprint(password_hash: str) -> str:
+    return hashlib.sha256((password_hash or "").encode("utf-8")).hexdigest()[:16]
+
+
+def create_reset_token(*, user_id: str, password_hash: str) -> str:
+    now = int(time.time())
+    payload = {
+        "sub": user_id,
+        "purpose": _RESET_PURPOSE,
+        "pwh": _password_fingerprint(password_hash),
+        "iat": now,
+        "exp": now + config.PASSWORD_RESET_EXPIRE_MINUTES * 60,
+    }
+    return jwt.encode(payload, config.JWT_SECRET_KEY, algorithm=config.JWT_ALGORITHM)
+
+
+def decode_reset_token(token: str) -> Optional[dict]:
+    """Returns the payload only if the token is a valid, unexpired reset token.
+    Callers must still check `pwh` against the user's current password hash via
+    reset_token_matches() - that's what enforces single use."""
+    try:
+        payload = jwt.decode(token, config.JWT_SECRET_KEY, algorithms=[config.JWT_ALGORITHM])
+    except jwt.PyJWTError:
+        return None
+    if payload.get("purpose") != _RESET_PURPOSE:
+        return None
+    return payload
+
+
+def reset_token_matches(payload: dict, current_password_hash: str) -> bool:
+    return payload.get("pwh") == _password_fingerprint(current_password_hash)
+
+
 _bearer_scheme = HTTPBearer(auto_error=False)
 
 
@@ -101,7 +145,8 @@ def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing bearer token")
 
     payload = decode_access_token(credentials.credentials)
-    if payload is None:
+    # A per-company user must never be one of the special-purpose tokens (reset, admin).
+    if payload is None or "company_code" not in payload:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired token")
 
     return CurrentUser(
@@ -109,3 +154,35 @@ def get_current_user(
         company_code=payload["company_code"],
         role=payload["role"],
     )
+
+
+# --- Platform admin (TurboFix team) --------------------------------------
+# A platform operator, not a per-company user: no company_code, not in the Users tab.
+# Authenticated by a single shared password from the environment, carried as a JWT
+# with purpose="admin" so it's never accepted by get_current_user and vice versa.
+_ADMIN_PURPOSE = "admin"
+
+
+def create_admin_token() -> str:
+    now = int(time.time())
+    payload = {
+        "sub": "turbofix-admin",
+        "purpose": _ADMIN_PURPOSE,
+        "iat": now,
+        "exp": now + config.ADMIN_TOKEN_EXPIRE_MINUTES * 60,
+    }
+    return jwt.encode(payload, config.JWT_SECRET_KEY, algorithm=config.JWT_ALGORITHM)
+
+
+def get_current_admin(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
+) -> bool:
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing bearer token")
+    try:
+        payload = jwt.decode(credentials.credentials, config.JWT_SECRET_KEY, algorithms=[config.JWT_ALGORITHM])
+    except jwt.PyJWTError:
+        payload = None
+    if payload is None or payload.get("purpose") != _ADMIN_PURPOSE:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="admin authentication required")
+    return True

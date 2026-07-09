@@ -14,7 +14,8 @@ import openpyxl
 from app import config
 
 _USERS_HEADER = ["user_id", "company_code", "name", "phone", "email", "role", "password_hash", "created_at"]
-_COMPANIES_HEADER = ["company_code", "company_name", "admin_contact_phone", "onboarded_date"]
+_COMPANIES_HEADER = ["company_code", "company_name", "admin_contact_phone", "onboarded_date",
+                     "machine_quota", "approved"]
 
 
 def next_user_id(company_code: str) -> str:
@@ -73,6 +74,46 @@ def get_company(company_code: str) -> Optional[dict]:
     return None
 
 
+def list_companies() -> list:
+    """All companies (for the internal admin console). Missing machine_quota/approved
+    cells (older tracker files) default to 0 / not-approved, so a company can't onboard
+    machines until the TurboFix team explicitly sets them."""
+    wb = openpyxl.load_workbook(config.TRACKER_XLSX_PATH, data_only=True)
+    if "Companies" not in wb.sheetnames:
+        return []
+    ws = wb["Companies"]
+    out = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if not row or not row[0]:
+            continue
+        out.append(dict(zip(_COMPANIES_HEADER, row)))
+    return out
+
+
+def update_company(company_code: str, fields: dict) -> bool:
+    """Patch machine_quota and/or approved for one company. Adds the columns to the
+    header if an older tracker file predates them. Returns True if a row matched."""
+    wb = openpyxl.load_workbook(config.TRACKER_XLSX_PATH)
+    if "Companies" not in wb.sheetnames:
+        return False
+    ws = wb["Companies"]
+    # Ensure the header has every column we're about to write.
+    existing_header = [c.value for c in ws[1]]
+    for col in _COMPANIES_HEADER:
+        if col not in existing_header:
+            ws.cell(row=1, column=len(existing_header) + 1, value=col)
+            existing_header.append(col)
+    target = _normalize(company_code)
+    for r in range(2, ws.max_row + 1):
+        if _normalize(ws.cell(row=r, column=1).value) == target:
+            for key, value in fields.items():
+                if key in existing_header:
+                    ws.cell(row=r, column=existing_header.index(key) + 1, value=value)
+            wb.save(config.TRACKER_XLSX_PATH)
+            return True
+    return False
+
+
 def add_user(row: dict) -> None:
     """row keys: user_id, company_code, name, phone, email, role, password_hash,
     created_at. Used by admin onboarding tooling (scripts/create_user.py) for
@@ -87,3 +128,19 @@ def add_user(row: dict) -> None:
         ws = wb["Users"]
     ws.append([row.get(col, "") for col in _USERS_HEADER])
     wb.save(config.TRACKER_XLSX_PATH)
+
+
+def update_password(user_id: str, new_password_hash: str) -> bool:
+    """Overwrites the password_hash cell for one user. Returns True if a row was
+    updated. Used by the password-reset flow."""
+    wb = openpyxl.load_workbook(config.TRACKER_XLSX_PATH)
+    if "Users" not in wb.sheetnames:
+        return False
+    ws = wb["Users"]
+    hash_col = _USERS_HEADER.index("password_hash") + 1
+    for r in range(2, ws.max_row + 1):
+        if ws.cell(row=r, column=1).value == user_id:
+            ws.cell(row=r, column=hash_col, value=new_password_hash)
+            wb.save(config.TRACKER_XLSX_PATH)
+            return True
+    return False

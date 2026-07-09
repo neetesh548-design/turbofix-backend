@@ -14,6 +14,8 @@ from app.config import GOOGLE_SERVICE_ACCOUNT_FILE, GOOGLE_SHEET_ID
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 _USERS_HEADER = ["user_id", "company_code", "name", "phone", "email", "role", "password_hash", "created_at"]
+_COMPANIES_HEADER = ["company_code", "company_name", "admin_contact_phone", "onboarded_date",
+                     "machine_quota", "approved"]
 
 
 def _client() -> gspread.Client:
@@ -71,3 +73,39 @@ def add_user(row: dict) -> None:
     ws = _spreadsheet().worksheet("Users")
     # RAW so phone numbers stay text instead of being coerced to numbers.
     ws.append_row([row.get(col, "") for col in _USERS_HEADER], value_input_option="RAW")
+
+
+def list_companies() -> list:
+    """All companies (for the internal admin console)."""
+    ws = _spreadsheet().worksheet("Companies")
+    return list(ws.get_all_records())
+
+
+def update_company(company_code: str, fields: dict) -> bool:
+    """Patch machine_quota and/or approved for one company. Adds a header cell if the
+    column is missing. Returns True if a row matched."""
+    ws = _spreadsheet().worksheet("Companies")
+    header = ws.row_values(1)
+    for col in fields:
+        if col not in header:
+            header.append(col)
+            ws.update_cell(1, len(header), col)
+    cell = ws.find(company_code, in_column=1)
+    if cell is None:
+        return False
+    for key, value in fields.items():
+        if key in header:
+            ws.update_cell(cell.row, header.index(key) + 1, value)
+    return True
+
+
+def update_password(user_id: str, new_password_hash: str) -> bool:
+    """Overwrites the password_hash cell for one user. Returns True if a row was
+    updated. Used by the password-reset flow."""
+    ws = _spreadsheet().worksheet("Users")
+    cell = ws.find(user_id, in_column=1)
+    if cell is None:
+        return False
+    hash_col = _USERS_HEADER.index("password_hash") + 1
+    ws.update_cell(cell.row, hash_col, new_password_hash)
+    return True

@@ -6,7 +6,10 @@ if TICKET_STORE == "sheets":
         get_company,
         get_user_by_id,
         get_user_by_identifier,
+        list_companies,
         next_user_id,
+        update_company,
+        update_password,
     )
 else:
     from app.users_store_local import (  # noqa: F401
@@ -14,5 +17,8 @@ else:
         get_company,
         get_user_by_id,
         get_user_by_identifier,
+        list_companies,
         next_user_id,
+        update_company,
+        update_password,
     )

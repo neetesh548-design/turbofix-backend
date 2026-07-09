@@ -9,16 +9,30 @@ in main.py so there's still only one process to run/deploy.
 """
 
 import mimetypes
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
-from app import config, documents_store, file_storage, parts_store, store, users_store
-from app.auth import CurrentUser, Role, create_access_token, get_current_user, hash_password, verify_password
+from app import config, documents_store, email_client, file_storage, parts_store, store, users_store
+from app.admin_page import ADMIN_HTML
+from app.auth import (
+    CurrentUser,
+    Role,
+    create_access_token,
+    create_admin_token,
+    create_reset_token,
+    decode_reset_token,
+    get_current_admin,
+    get_current_user,
+    hash_password,
+    reset_token_matches,
+    verify_password,
+)
 
 router = APIRouter()
 
@@ -107,6 +121,60 @@ def signup(body: SignupRequest):
             "company_code": body.company_code,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Password reset (email link)
+# ---------------------------------------------------------------------------
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+@router.post("/auth/forgot-password")
+def forgot_password(body: ForgotPasswordRequest, background: BackgroundTasks):
+    """Emails a one-time reset link to the address on file. Always returns the same
+    generic response whether or not an account exists, so it can't be used to probe
+    which emails are registered. The send happens in the background, so response time
+    doesn't leak it either."""
+    user = users_store.get_user_by_identifier(body.email)
+    if user and user.get("email"):
+        token = create_reset_token(user_id=user["user_id"], password_hash=user.get("password_hash", ""))
+        link = f"{config.RESET_LINK_BASE}?token={quote(token)}"
+        mins = config.PASSWORD_RESET_EXPIRE_MINUTES
+        text = (
+            f"Hi {user.get('name') or 'there'},\n\n"
+            f"Someone asked to reset the password for your TurboFix account.\n"
+            f"If it was you, open this link within {mins} minutes to choose a new password:\n\n"
+            f"{link}\n\n"
+            f"If it wasn't you, ignore this email - your password stays unchanged.\n"
+        )
+        background.add_task(email_client.send_email, user["email"], "Reset your TurboFix password", text)
+    return {"message": "If an account with that email exists, a reset link has been sent."}
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+@router.post("/auth/reset-password")
+def reset_password(body: ResetPasswordRequest):
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="password must be at least 8 characters")
+
+    payload = decode_reset_token(body.token)
+    if payload is None:
+        raise HTTPException(status_code=400, detail="this reset link is invalid or has expired")
+
+    user = users_store.get_user_by_id(payload["sub"])
+    # A pwh mismatch means the link was already used, or the password otherwise changed
+    # since it was issued - same generic error as a bad/expired token, no detail leaked.
+    if user is None or not reset_token_matches(payload, user.get("password_hash", "")):
+        raise HTTPException(status_code=400, detail="this reset link is invalid or has expired")
+
+    users_store.update_password(user["user_id"], hash_password(body.new_password))
+    return {"message": "Your password has been reset. You can now sign in with it."}
 
 
 # ---------------------------------------------------------------------------
@@ -244,13 +312,55 @@ class MachineIn(BaseModel):
     informed_phone_3: str = ""
 
 
+def _company_quota(company: dict) -> int:
+    """machine_quota may come back as int, str, or blank (older tracker). Blank/invalid
+    means 0 - the account can't onboard until the TurboFix team sets a paid quota."""
+    try:
+        return int(str(company.get("machine_quota") or 0).strip())
+    except (ValueError, TypeError):
+        return 0
+
+
+def _company_approved(company: dict) -> bool:
+    return str(company.get("approved") or "").strip().lower() in {"yes", "true", "1"}
+
+
+def _assert_can_onboard(company_code: str) -> dict:
+    """Gate machine onboarding on TurboFix approval + paid machine quota. Returns the
+    company record (with current usage) so the caller can echo the plan back."""
+    company = users_store.get_company(company_code)
+    if company is None:
+        raise HTTPException(status_code=404, detail="company not found")
+
+    if not _company_approved(company):
+        raise HTTPException(
+            status_code=403,
+            detail="Your company is pending TurboFix approval. "
+                   "You'll be able to onboard machines once the TurboFix team activates your account.",
+        )
+
+    quota = _company_quota(company)
+    used = len(store.get_company_machines(company_code))
+    if used >= quota:
+        # 402 Payment Required is the semantically correct signal for "over plan".
+        raise HTTPException(
+            status_code=402,
+            detail=f"You've reached your plan's limit of {quota} "
+                   f"machine{'s' if quota != 1 else ''}. "
+                   f"Please upgrade your subscription to onboard more machines.",
+        )
+    return {"quota": quota, "used": used}
+
+
 @router.post("/vault/machines", status_code=201)
 def create_machine(body: MachineIn, user: CurrentUser = Depends(get_current_user)):
     """Self-service machine onboarding: caller supplies name/location/technician, we
     generate the machine_id (TF-{companyCode}-M{nnn}) and a ready-to-print wa.me QR
     link, so a non-technical owner/maintenance_head never touches the tracker/Sheet
-    directly."""
+    directly. Blocked once the company hits its paid machine_quota, or before the
+    TurboFix team has approved the account."""
     user.assert_can_write()
+    plan = _assert_can_onboard(user.company_code)
     machine_code = store.next_machine_code(user.company_code)
     machine_id = f"TF-{user.company_code}-{machine_code}"
     row = {"machine_id": machine_id, "company_code": user.company_code, **body.model_dump()}
@@ -260,7 +370,9 @@ def create_machine(body: MachineIn, user: CurrentUser = Depends(get_current_user
     if config.WHATSAPP_DISPLAY_NUMBER:
         text = quote(f"Issue with {machine_id}: ")
         wa_link = f"https://wa.me/{config.WHATSAPP_DISPLAY_NUMBER}?text={text}"
-    return {**row, "wa_link": wa_link}
+    # machines_used is post-create, so the UI can show "4 of 5 used" right away.
+    return {**row, "wa_link": wa_link,
+            "machine_quota": plan["quota"], "machines_used": plan["used"] + 1}
 
 
 def _get_machine_in_company(machine_id: str, user: CurrentUser) -> dict:
@@ -470,3 +582,76 @@ def delete_consumable(consumable_id: str, user: CurrentUser = Depends(get_curren
 
     parts_store.delete_item("consumables", consumable_id)
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Internal admin console (TurboFix team) — approve companies, set machine quota
+# ---------------------------------------------------------------------------
+
+class AdminLoginRequest(BaseModel):
+    password: str
+
+
+@router.post("/admin/login")
+def admin_login(body: AdminLoginRequest):
+    # Constant-time compare so a wrong password can't be teased out by timing.
+    if not secrets.compare_digest(body.password, config.PLATFORM_ADMIN_PASSWORD):
+        raise HTTPException(status_code=401, detail="incorrect admin password")
+    return {"access_token": create_admin_token(), "token_type": "bearer"}
+
+
+@router.get("/admin/companies")
+def admin_list_companies(_: bool = Depends(get_current_admin)):
+    """Every company with its plan and current usage, for the admin table."""
+    out = []
+    for c in users_store.list_companies():
+        code = c.get("company_code")
+        out.append({
+            "company_code": code,
+            "company_name": c.get("company_name"),
+            "admin_contact_phone": c.get("admin_contact_phone"),
+            "onboarded_date": str(c.get("onboarded_date") or ""),
+            "machine_quota": _company_quota(c),
+            "approved": _company_approved(c),
+            "machines_used": len(store.get_company_machines(code)) if code else 0,
+        })
+    return out
+
+
+class CompanyUpdate(BaseModel):
+    machine_quota: Optional[int] = None
+    approved: Optional[bool] = None
+
+
+@router.post("/admin/companies/{company_code}")
+def admin_update_company(company_code: str, body: CompanyUpdate, _: bool = Depends(get_current_admin)):
+    """Approve/unapprove a company and/or change its paid machine quota."""
+    if users_store.get_company(company_code) is None:
+        raise HTTPException(status_code=404, detail="company not found")
+
+    fields = {}
+    if body.machine_quota is not None:
+        if body.machine_quota < 0:
+            raise HTTPException(status_code=400, detail="machine_quota cannot be negative")
+        fields["machine_quota"] = body.machine_quota
+    if body.approved is not None:
+        fields["approved"] = "yes" if body.approved else "no"
+    if not fields:
+        raise HTTPException(status_code=400, detail="nothing to update")
+
+    users_store.update_company(company_code, fields)
+    company = users_store.get_company(company_code)
+    return {
+        "company_code": company_code,
+        "machine_quota": _company_quota(company),
+        "approved": _company_approved(company),
+        "machines_used": len(store.get_company_machines(company_code)),
+    }
+
+
+@router.get("/admin", response_class=HTMLResponse)
+def admin_console():
+    """The internal TurboFix-team admin page. Self-contained HTML served straight from
+    the backend - no build step, no separate host. Auth happens client-side against
+    /admin/login; every data call carries the admin bearer token."""
+    return HTMLResponse(ADMIN_HTML)

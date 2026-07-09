@@ -96,3 +96,28 @@ ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".dwg",
 VAULT_CORS_ORIGINS = [
     o.strip() for o in os.getenv("VAULT_CORS_ORIGINS", "*").split(",") if o.strip()
 ]
+
+# Password reset (Phase 5). Same "runs locally with zero credentials, real service
+# for production" split used by TICKET_STORE and DOCUMENT_STORE:
+#   - "console" (default) writes the reset email (including the link) to the log, so
+#     local dev and the test suite exercise the full flow without any email account.
+#   - "smtp" sends a real email via any SMTP endpoint (SendGrid/SES/Mailgun/Gmail
+#     app-password); set SMTP_HOST/PORT/USER/PASSWORD + EMAIL_FROM.
+EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "console")
+EMAIL_FROM = os.getenv("EMAIL_FROM", "TurboFix <no-reply@turbofix.local>")
+SMTP_HOST = os.getenv("SMTP_HOST", "")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+
+# How long a password-reset link stays valid, and where it points. The link opens the
+# static reset-password.html page in the demo-site, which posts the token back here.
+PASSWORD_RESET_EXPIRE_MINUTES = int(os.getenv("PASSWORD_RESET_EXPIRE_MINUTES", "30"))
+RESET_LINK_BASE = os.getenv("RESET_LINK_BASE", "http://localhost:8080/reset-password.html")
+
+# Internal TurboFix-team admin console (GET /admin) - approve companies and set their
+# paid machine_quota. This is a platform operator, not a per-company user, so it isn't
+# in the Users tab; it logs in with a single shared password from the environment.
+# The dev default is obviously insecure so a real deployment is forced to set its own.
+PLATFORM_ADMIN_PASSWORD = os.getenv("PLATFORM_ADMIN_PASSWORD", "dev-admin-change-me")
+ADMIN_TOKEN_EXPIRE_MINUTES = int(os.getenv("ADMIN_TOKEN_EXPIRE_MINUTES", "120"))
