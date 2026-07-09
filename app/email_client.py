@@ -16,8 +16,9 @@ import sys
 from email.message import EmailMessage
 
 from app import config
+from app.infrastructure.logging import get_logger
 
-logger = logging.getLogger("turbofix.email")
+logger = get_logger("turbofix.email")
 
 
 def _send_console(to: str, subject: str, body: str) -> None:
@@ -58,5 +59,5 @@ def send_email(to: str, subject: str, body: str) -> None:
             _send_smtp(to, subject, body)
         else:
             _send_console(to, subject, body)
-    except Exception:  # noqa: BLE001 - deliberately never propagates to the caller
-        logger.exception("[email] failed to send to=%s", to)
+    except Exception as exc:  # noqa: BLE001 - deliberately never propagates to the caller
+        logger.exception("email.send_failed", to=to, error=str(exc))
