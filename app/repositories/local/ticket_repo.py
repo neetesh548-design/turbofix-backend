@@ -13,10 +13,13 @@ import openpyxl
 
 from app import config
 from app.repositories.base import (
+    MACHINE_EVENTS_HEADER,
     MACHINES_HEADER,
     TICKETS_HEADER,
+    EventRepository,
     MachineRepository,
     TicketRepository,
+    new_event_id,
     new_ticket_id,
 )
 
@@ -90,6 +93,98 @@ class LocalTicketRepository(TicketRepository):
                         {col: row_cells[i].value for i, col in enumerate(TICKETS_HEADER)}
                     )
             return tickets
+
+    def attach_photo(self, ticket_id: str, media_id: str) -> bool:
+        with self._lock:
+            wb = openpyxl.load_workbook(self._path)
+            ws = wb["Tickets"]
+            col_idx = TICKETS_HEADER.index("photo_media_id")
+            for row_cells in ws.iter_rows(min_row=2):
+                if row_cells[0].value == ticket_id:
+                    row_cells[col_idx].value = media_id
+                    wb.save(self._path)
+                    return True
+        return False
+
+    def update_language(self, ticket_id: str, language: str) -> bool:
+        with self._lock:
+            wb = openpyxl.load_workbook(self._path)
+            ws = wb["Tickets"]
+            col_idx = TICKETS_HEADER.index("language")
+            for row_cells in ws.iter_rows(min_row=2):
+                if row_cells[0].value == ticket_id:
+                    row_cells[col_idx].value = language
+                    wb.save(self._path)
+                    return True
+        return False
+
+    def close_ticket(self, ticket_id: str, closed_by: str) -> bool:
+        from datetime import datetime, timezone
+        with self._lock:
+            wb = openpyxl.load_workbook(self._path)
+            ws = wb["Tickets"]
+            for row_cells in ws.iter_rows(min_row=2):
+                if row_cells[0].value == ticket_id:
+                    row_cells[TICKETS_HEADER.index("status")].value = "Closed"
+                    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+                    row_cells[TICKETS_HEADER.index("closed_at")].value = now
+                    row_cells[TICKETS_HEADER.index("closed_by")].value = closed_by
+                    wb.save(self._path)
+                    return True
+        return False
+
+    def find_by_id_prefix(self, prefix: str) -> Optional[dict]:
+        wb = openpyxl.load_workbook(self._path, data_only=True)
+        ws = wb["Tickets"]
+        prefix_upper = prefix.upper()
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if row and row[0] and str(row[0]).upper().startswith(prefix_upper):
+                return dict(zip(TICKETS_HEADER, row))
+        return None
+
+
+class LocalEventRepository(EventRepository):
+    """Reads/writes events in the MachineEvents tab of the local tracker workbook."""
+
+    def __init__(self, xlsx_path: str):
+        self._path = xlsx_path
+        self._lock = threading.Lock()
+
+    def _ensure_tab(self, wb):
+        if "MachineEvents" not in wb.sheetnames:
+            ws = wb.create_sheet("MachineEvents")
+            ws.append(MACHINE_EVENTS_HEADER)
+            return ws
+        return wb["MachineEvents"]
+
+    def append(self, row: dict) -> None:
+        with self._lock:
+            wb = openpyxl.load_workbook(self._path)
+            ws = self._ensure_tab(wb)
+            ws.append([row.get(col, "") for col in MACHINE_EVENTS_HEADER])
+            wb.save(self._path)
+
+    def get_machine_events(self, machine_id: str) -> List[dict]:
+        wb = openpyxl.load_workbook(self._path, data_only=True)
+        if "MachineEvents" not in wb.sheetnames:
+            return []
+        ws = wb["MachineEvents"]
+        events = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if row and row[1] == machine_id:
+                events.append(dict(zip(MACHINE_EVENTS_HEADER, row)))
+        return events
+
+    def get_company_events(self, company_code: str) -> List[dict]:
+        wb = openpyxl.load_workbook(self._path, data_only=True)
+        if "MachineEvents" not in wb.sheetnames:
+            return []
+        ws = wb["MachineEvents"]
+        events = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if row and row[2] == company_code:
+                events.append(dict(zip(MACHINE_EVENTS_HEADER, row)))
+        return events
 
 
 class LocalMachineRepository(MachineRepository):

@@ -83,7 +83,9 @@ def signup(body: SignupRequest, users: UserRepository = Depends(get_users)):
         raise HTTPException(status_code=400, detail="password must be at least 8 characters")
 
     company = users.get_company(body.company_code)
-    if company is None or (company.get("admin_contact_phone") or "").strip() != body.admin_contact_phone.strip():
+    stored_phone = "".join(c for c in str(company.get("admin_contact_phone", "")) if c.isdigit()) if company else ""
+    input_phone = "".join(c for c in body.admin_contact_phone if c.isdigit())
+    if company is None or stored_phone != input_phone:
         raise HTTPException(status_code=401, detail="company code or admin contact phone is incorrect")
 
     if (body.phone and users.get_by_identifier(body.phone)) or (

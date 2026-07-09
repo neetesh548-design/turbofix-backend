@@ -36,6 +36,10 @@ def new_item_id(kind: str) -> str:
     return f"{prefix}-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{secrets.token_hex(2)}"
 
 
+def new_event_id() -> str:
+    return f"EVT-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{secrets.token_hex(2)}"
+
+
 # Column schemas — shared constants so local/sheets repos never drift apart.
 MACHINES_HEADER = [
     "machine_id", "company_code", "machine_name", "location",
@@ -46,7 +50,14 @@ MACHINES_HEADER = [
 TICKETS_HEADER = [
     "ticket_id", "machine_id", "company_code", "machine_name", "reported_at",
     "reporter_phone", "description", "ai_summary", "urgency", "status",
-    "closed_at", "hours_to_fix", "voice_note_media_id",
+    "closed_at", "hours_to_fix", "voice_note_media_id", "photo_media_id",
+    "language", "closed_by",
+]
+
+MACHINE_EVENTS_HEADER = [
+    "event_id", "machine_id", "company_code", "ticket_id", "event_type",
+    "timestamp", "actor_phone", "description", "media_type", "media_id",
+    "language",
 ]
 
 USERS_HEADER = [
@@ -115,6 +126,38 @@ class TicketRepository(ABC):
     @abstractmethod
     def get_company_tickets(self, company_code: str) -> List[dict]:
         """Return all tickets belonging to a company."""
+
+    @abstractmethod
+    def attach_photo(self, ticket_id: str, media_id: str) -> bool:
+        """Set photo_media_id on the matching row. Returns True if found."""
+
+    @abstractmethod
+    def update_language(self, ticket_id: str, language: str) -> bool:
+        """Set the detected language on the matching ticket. Returns True if found."""
+
+    @abstractmethod
+    def close_ticket(self, ticket_id: str, closed_by: str) -> bool:
+        """Mark a ticket as Closed with timestamp and who closed it. Returns True if found."""
+
+    @abstractmethod
+    def find_by_id_prefix(self, prefix: str) -> Optional[dict]:
+        """Find a ticket whose ticket_id starts with prefix (case-insensitive)."""
+
+
+class EventRepository(ABC):
+    """Read/write access to the MachineEvents data entity."""
+
+    @abstractmethod
+    def append(self, row: dict) -> None:
+        """Append a new event row. Keys must match MACHINE_EVENTS_HEADER."""
+
+    @abstractmethod
+    def get_machine_events(self, machine_id: str) -> List[dict]:
+        """Return all events for a machine, oldest first."""
+
+    @abstractmethod
+    def get_company_events(self, company_code: str) -> List[dict]:
+        """Return all events for a company."""
 
 
 class MachineRepository(ABC):

@@ -21,12 +21,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import config
 from app.infrastructure.logging import configure_logging, get_logger
 from app.routers.admin_router import router as admin_router
+from app.routers.report_router import router as report_router
 from app.routers.auth_router import router as auth_router
 from app.routers.dashboard_router import router as dashboard_router
 from app.routers.vault_router import router as vault_router
 from app.routers.webhook_router import get_sessions, router as webhook_router
 from app.services.ticket_service import sweep_expired_unnotified
-from app.dependencies import get_tickets, get_machines
+from app.dependencies import get_events, get_tickets, get_machines
 
 configure_logging()
 log = get_logger("turbofix.main")
@@ -79,6 +80,7 @@ app.include_router(auth_router)
 app.include_router(vault_router)
 app.include_router(dashboard_router)
 app.include_router(admin_router)
+app.include_router(report_router)
 
 
 @app.get("/health", tags=["ops"])

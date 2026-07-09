@@ -4,15 +4,12 @@ This router is intentionally thin:
 - Parse the incoming HTTP request.
 - Return 200 OK to WhatsApp as fast as possible.
 - Delegate all business logic to ticket_service.
-
-No business logic lives here; that keeps this module trivially testable
-(just check status codes and call counts, not business outcomes).
 """
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
 
-from app.dependencies import get_machines, get_tickets
-from app.repositories.base import MachineRepository, TicketRepository
+from app.dependencies import get_events, get_machines, get_tickets
+from app.repositories.base import EventRepository, MachineRepository, TicketRepository
 from app.services import ticket_service
 from app.sessions import SessionStore
 from app import config
@@ -22,8 +19,6 @@ log = get_logger("turbofix.webhook")
 
 router = APIRouter()
 
-# Module-level session store (one per process, same as before).
-# In a future multi-replica deployment this would move to Redis.
 _sessions = SessionStore()
 
 
@@ -58,6 +53,7 @@ async def receive_webhook(
     background_tasks: BackgroundTasks,
     tickets: TicketRepository = Depends(get_tickets),
     machines: MachineRepository = Depends(get_machines),
+    events: EventRepository = Depends(get_events),
 ):
     """Receive and dispatch an incoming WhatsApp message.
 
@@ -79,6 +75,7 @@ async def receive_webhook(
                 sessions=sessions,
                 tickets=tickets,
                 machines=machines,
+                events=events,
             )
         elif msg_type == "audio":
             await ticket_service.handle_audio_message(
@@ -88,6 +85,17 @@ async def receive_webhook(
                 sessions=sessions,
                 tickets=tickets,
                 machines=machines,
+                events=events,
+            )
+        elif msg_type == "image":
+            await ticket_service.handle_image_message(
+                phone=phone,
+                media_id=message.get("image", {}).get("id", ""),
+                background_tasks=background_tasks,
+                sessions=sessions,
+                tickets=tickets,
+                machines=machines,
+                events=events,
             )
         else:
             log.info("webhook.unsupported_type", msg_type=msg_type, phone=phone)

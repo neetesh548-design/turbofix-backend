@@ -46,6 +46,7 @@ def client(tmp_path, monkeypatch):
     from app import dependencies
     dependencies.get_tickets.cache_clear()
     dependencies.get_machines.cache_clear()
+    dependencies.get_events.cache_clear()
     dependencies.get_users.cache_clear()
     dependencies.get_documents.cache_clear()
     dependencies.get_parts.cache_clear()
@@ -61,6 +62,7 @@ def client(tmp_path, monkeypatch):
     # Cleanup
     dependencies.get_tickets.cache_clear()
     dependencies.get_machines.cache_clear()
+    dependencies.get_events.cache_clear()
     dependencies.get_users.cache_clear()
     dependencies.get_documents.cache_clear()
     dependencies.get_parts.cache_clear()

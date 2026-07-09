@@ -5,8 +5,10 @@ import time
 from typing import Dict, List, Optional
 
 from app.repositories.base import (
+    MACHINE_EVENTS_HEADER,
     MACHINES_HEADER,
     TICKETS_HEADER,
+    EventRepository,
     MachineRepository,
     TicketRepository,
     new_ticket_id,
@@ -71,6 +73,74 @@ class SheetsTicketRepository(TicketRepository):
     def get_company_tickets(self, company_code: str) -> List[dict]:
         ws = self._ws()
         all_rows = ws.get_all_records()
+        return [r for r in all_rows if r.get("company_code") == company_code]
+
+    def attach_photo(self, ticket_id: str, media_id: str) -> bool:
+        ws = self._ws()
+        cell = ws.find(ticket_id, in_column=1)
+        if cell is None:
+            return False
+        ws.update_cell(cell.row, TICKETS_HEADER.index("photo_media_id") + 1, media_id)
+        return True
+
+    def update_language(self, ticket_id: str, language: str) -> bool:
+        ws = self._ws()
+        cell = ws.find(ticket_id, in_column=1)
+        if cell is None:
+            return False
+        ws.update_cell(cell.row, TICKETS_HEADER.index("language") + 1, language)
+        return True
+
+    def close_ticket(self, ticket_id: str, closed_by: str) -> bool:
+        from datetime import datetime, timezone
+        ws = self._ws()
+        cell = ws.find(ticket_id, in_column=1)
+        if cell is None:
+            return False
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+        ws.update_cell(cell.row, TICKETS_HEADER.index("status") + 1, "Closed")
+        ws.update_cell(cell.row, TICKETS_HEADER.index("closed_at") + 1, now)
+        ws.update_cell(cell.row, TICKETS_HEADER.index("closed_by") + 1, closed_by)
+        return True
+
+    def find_by_id_prefix(self, prefix: str) -> Optional[dict]:
+        ws = self._ws()
+        all_rows = ws.get_all_values()
+        prefix_upper = prefix.upper()
+        for row in all_rows[1:]:
+            if row and row[0] and row[0].upper().startswith(prefix_upper):
+                row += [""] * (len(TICKETS_HEADER) - len(row))
+                return dict(zip(TICKETS_HEADER, row))
+        return None
+
+
+class SheetsEventRepository(EventRepository):
+    """Reads/writes events in the MachineEvents worksheet of a Google Sheet."""
+
+    def __init__(self, service_account_file: str, sheet_id: str):
+        self._sa_file = service_account_file
+        self._sheet_id = sheet_id
+
+    def _ws(self):
+        sp = get_spreadsheet(self._sa_file, self._sheet_id)
+        try:
+            return sp.worksheet("MachineEvents")
+        except Exception:
+            ws = sp.add_worksheet(title="MachineEvents", rows=1000, cols=len(MACHINE_EVENTS_HEADER))
+            ws.append_row(MACHINE_EVENTS_HEADER, value_input_option="RAW")
+            return ws
+
+    def append(self, row: dict) -> None:
+        self._ws().append_row(
+            [row.get(col, "") for col in MACHINE_EVENTS_HEADER], value_input_option="RAW"
+        )
+
+    def get_machine_events(self, machine_id: str) -> List[dict]:
+        all_rows = self._ws().get_all_records()
+        return [r for r in all_rows if r.get("machine_id") == machine_id]
+
+    def get_company_events(self, company_code: str) -> List[dict]:
+        all_rows = self._ws().get_all_records()
         return [r for r in all_rows if r.get("company_code") == company_code]
 
 

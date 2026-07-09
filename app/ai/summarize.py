@@ -14,9 +14,12 @@ _SYSTEM_PROMPT = (
     "Given a worker's description of a machine issue (which may be a rough voice-note "
     "transcript), respond with a JSON object with exactly these keys: "
     '"likely_cause" (a short technical guess at the root cause), '
-    '"urgency" (one of "Low", "Medium", "High"), and '
-    '"suggested_action" (a short, concrete first step for the technician). '
-    "Be concise - each field should be one short sentence."
+    '"urgency" (one of "Low", "Medium", "High"), '
+    '"suggested_action" (a short, concrete first step for the technician), '
+    '"owner_summary" (1-2 sentences for the factory owner: urgency level, estimated production impact, cost risk), '
+    '"supervisor_summary" (1-2 sentences for the supervisor: which team/person should respond, production line impact), '
+    '"technician_summary" (1-2 sentences for the maintenance technician: technical diagnosis, specific tools/parts needed, step-by-step first action). '
+    "Be concise - each field should be one or two short sentences."
 )
 
 
@@ -25,6 +28,9 @@ class IssueBrief:
     likely_cause: str
     urgency: str
     suggested_action: str
+    owner_summary: str = ""
+    supervisor_summary: str = ""
+    technician_summary: str = ""
 
     def as_ai_summary(self) -> str:
         return f"Likely cause: {self.likely_cause} | Suggested action: {self.suggested_action}"
@@ -62,4 +68,7 @@ async def summarize_issue(description: str) -> IssueBrief:
         likely_cause=str(parsed.get("likely_cause", "")).strip(),
         urgency=_normalize_urgency(parsed.get("urgency", "")),
         suggested_action=str(parsed.get("suggested_action", "")).strip(),
+        owner_summary=str(parsed.get("owner_summary", "")).strip(),
+        supervisor_summary=str(parsed.get("supervisor_summary", "")).strip(),
+        technician_summary=str(parsed.get("technician_summary", "")).strip(),
     )

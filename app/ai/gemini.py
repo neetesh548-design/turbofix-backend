@@ -1,18 +1,15 @@
 import base64
 import json
 from pathlib import Path
+from typing import List
 
 import httpx
 
 from app import config
 from app.ai.summarize import _SYSTEM_PROMPT, IssueBrief, _normalize_urgency
 
-# Raw REST like the OpenAI modules (no SDK dependency). Gemini's generateContent
-# handles both audio transcription (inline audio part) and JSON summarization,
-# so one free-tier API key covers the whole AI layer.
 _GENERATE_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-# WhatsApp voice notes arrive as ogg/opus; the rest are here for completeness.
 _AUDIO_MIME_TYPES = {
     ".ogg": "audio/ogg",
     ".oga": "audio/ogg",
@@ -22,6 +19,14 @@ _AUDIO_MIME_TYPES = {
     ".aac": "audio/aac",
     ".wav": "audio/wav",
     ".amr": "audio/amr",
+}
+
+_IMAGE_MIME_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
 }
 
 
@@ -84,4 +89,105 @@ async def summarize_issue(description: str) -> IssueBrief:
         likely_cause=str(parsed.get("likely_cause", "")).strip(),
         urgency=_normalize_urgency(parsed.get("urgency", "")),
         suggested_action=str(parsed.get("suggested_action", "")).strip(),
+        owner_summary=str(parsed.get("owner_summary", "")).strip(),
+        supervisor_summary=str(parsed.get("supervisor_summary", "")).strip(),
+        technician_summary=str(parsed.get("technician_summary", "")).strip(),
     )
+
+
+async def analyze_image(file_path: str) -> str:
+    """Send a machine photo to Gemini and get a text description of visible issues."""
+    path = Path(file_path)
+    mime_type = _IMAGE_MIME_TYPES.get(path.suffix.lower(), "image/jpeg")
+    img_b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": (
+                    "You are a factory maintenance assistant. Analyze this machine photo. "
+                    "Describe what you see: the machine/part condition, any visible damage, "
+                    "wear, leaks, misalignment, or anomalies. Be concise and technical. "
+                    "If nothing looks wrong, say so."
+                )},
+                {"inline_data": {"mime_type": mime_type, "data": img_b64}},
+            ]
+        }]
+    }
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(_url(), headers=_headers(), json=payload)
+        resp.raise_for_status()
+        return _response_text(resp.json()).strip()
+
+
+async def detect_language(text: str) -> str:
+    """Detect the language and return an ISO 639-1 code."""
+    payload = {
+        "contents": [{
+            "parts": [{"text": (
+                "Detect the language of the following text and respond with ONLY "
+                "the ISO 639-1 two-letter language code (e.g. 'en', 'hi', 'mr', 'ta', 'te'). "
+                "Nothing else.\n\n"
+                f"{text}"
+            )}]
+        }]
+    }
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(_url(), headers=_headers(), json=payload)
+        resp.raise_for_status()
+        code = _response_text(resp.json()).strip().lower()[:2]
+        return code if len(code) == 2 else "en"
+
+
+async def translate_message(text: str, target_language: str) -> str:
+    """Translate text to the target language."""
+    lang_names = {
+        "hi": "Hindi", "mr": "Marathi", "en": "English", "ta": "Tamil",
+        "te": "Telugu", "kn": "Kannada", "gu": "Gujarati", "bn": "Bengali",
+    }
+    lang_name = lang_names.get(target_language, target_language)
+
+    payload = {
+        "contents": [{
+            "parts": [{"text": (
+                f"Translate the following text to {lang_name}. "
+                "Reply with ONLY the translation, no preamble.\n\n"
+                f"{text}"
+            )}]
+        }]
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(_url(), headers=_headers(), json=payload)
+        resp.raise_for_status()
+        return _response_text(resp.json()).strip()
+
+
+async def root_cause_analysis(machine_name: str, events: List[dict]) -> str:
+    """Analyze a machine's event history for patterns and root causes."""
+    events_text = "\n".join(
+        f"- [{e.get('timestamp', '?')}] {e.get('event_type', '?')}: {e.get('description', '?')}"
+        for e in events
+    )
+
+    payload = {
+        "contents": [{
+            "parts": [{"text": (
+                f"You are a factory maintenance expert. Analyze the maintenance history "
+                f"for machine '{machine_name}' below and identify:\n"
+                "1. Recurring patterns or failure modes\n"
+                "2. Likely root causes\n"
+                "3. Recommended preventive actions\n"
+                "4. Expected next failure (if predictable)\n\n"
+                "Be concise and actionable. Use simple language a factory supervisor can understand.\n\n"
+                f"Event history:\n{events_text}"
+            )}]
+        }]
+    }
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(_url(), headers=_headers(), json=payload)
+        resp.raise_for_status()
+        return _response_text(resp.json()).strip()

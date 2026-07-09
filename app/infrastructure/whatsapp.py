@@ -41,12 +41,7 @@ async def download_media(media_id: str) -> str:
 
 
 async def send_template_message(to: str, params: List[str]) -> None:
-    """Send the pre-approved ticket notification template to `to`.
-
-    Uses resilient_post — transient 429s (Meta rate limit) are retried with
-    exponential backoff before raising, so a brief Meta outage no longer silently
-    drops fan-out notifications.
-    """
+    """Send the pre-approved ticket notification template to `to`."""
     headers = {
         "Authorization": f"Bearer {config.WHATSAPP_ACCESS_TOKEN}",
         "Content-Type": "application/json",
@@ -70,3 +65,50 @@ async def send_template_message(to: str, params: List[str]) -> None:
         json=payload,
     )
     log.info("whatsapp.template_sent", to=to, template=config.WHATSAPP_TICKET_TEMPLATE_NAME)
+
+
+async def send_closure_template(to: str, params: List[str]) -> None:
+    """Send the ticket-closed notification template to `to`."""
+    headers = {
+        "Authorization": f"Bearer {config.WHATSAPP_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "template",
+        "template": {
+            "name": config.WHATSAPP_CLOSURE_TEMPLATE_NAME,
+            "language": {"code": config.WHATSAPP_CLOSURE_TEMPLATE_LANGUAGE},
+            "components": [{
+                "type": "body",
+                "parameters": [{"type": "text", "text": str(p)} for p in params],
+            }],
+        },
+    }
+    await resilient_post(
+        _graph_url(f"{config.WHATSAPP_PHONE_NUMBER_ID}/messages"),
+        headers=headers,
+        json=payload,
+    )
+    log.info("whatsapp.closure_sent", to=to, template=config.WHATSAPP_CLOSURE_TEMPLATE_NAME)
+
+
+async def send_text_message(to: str, text: str) -> None:
+    """Send a plain text message (only works within 24h customer-service window)."""
+    headers = {
+        "Authorization": f"Bearer {config.WHATSAPP_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "text",
+        "text": {"body": text},
+    }
+    await resilient_post(
+        _graph_url(f"{config.WHATSAPP_PHONE_NUMBER_ID}/messages"),
+        headers=headers,
+        json=payload,
+    )
+    log.info("whatsapp.text_sent", to=to)

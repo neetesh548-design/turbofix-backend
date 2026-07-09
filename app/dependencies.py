@@ -25,6 +25,7 @@ from functools import lru_cache
 from app import config
 from app.repositories.base import (
     DocumentRepository,
+    EventRepository,
     MachineRepository,
     PartsRepository,
     TicketRepository,
@@ -44,6 +45,16 @@ def get_tickets() -> TicketRepository:
         return SheetsTicketRepository(config.GOOGLE_SERVICE_ACCOUNT_FILE, config.GOOGLE_SHEET_ID)
     from app.repositories.local.ticket_repo import LocalTicketRepository
     return LocalTicketRepository(config.TRACKER_XLSX_PATH)
+
+
+@lru_cache(maxsize=1)
+def get_events() -> EventRepository:
+    """Return the configured EventRepository implementation (cached singleton)."""
+    if config.TICKET_STORE == "sheets":
+        from app.repositories.sheets.ticket_repo import SheetsEventRepository
+        return SheetsEventRepository(config.GOOGLE_SERVICE_ACCOUNT_FILE, config.GOOGLE_SHEET_ID)
+    from app.repositories.local.ticket_repo import LocalEventRepository
+    return LocalEventRepository(config.TRACKER_XLSX_PATH)
 
 
 @lru_cache(maxsize=1)
