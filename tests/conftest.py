@@ -4,10 +4,8 @@ from pathlib import Path
 
 # Tests always run against the local xlsx store with the AI layer and WhatsApp off,
 # regardless of what the developer's .env says — otherwise a .env pointed at the
-# live Google Sheet (Phase 3) would make the suite write test rows into live data
-# and fire real network calls. Must be set before any `app` import: the stores bind
-# their backend at import time from TICKET_STORE, and load_dotenv() does not
-# override variables that are already in the environment.
+# live Google Sheet would make the suite write test rows into live data
+# and fire real network calls. Must be set before any `app` import.
 os.environ["TICKET_STORE"] = "local"
 os.environ["GEMINI_API_KEY"] = ""
 os.environ["OPENAI_API_KEY"] = ""
@@ -28,6 +26,16 @@ ACME_SUPERVISOR = ("sunil@acmeforge.example", "AcmeSuper@2026")
 BETA_OWNER = ("meena@betaprecision.example", "BetaOwner@2026")
 
 
+def _clear_di_caches():
+    """Clear all DI factory lru_caches so monkeypatched config is picked up."""
+    from app import dependencies
+    dependencies.get_tickets.cache_clear()
+    dependencies.get_machines.cache_clear()
+    dependencies.get_users.cache_clear()
+    dependencies.get_documents.cache_clear()
+    dependencies.get_parts.cache_clear()
+
+
 @pytest.fixture
 def vault_client(tmp_path, monkeypatch):
     """A TestClient wired to a throwaway copy of the tracker (never the real one)
@@ -40,9 +48,15 @@ def vault_client(tmp_path, monkeypatch):
     doc_store_dir.mkdir()
     monkeypatch.setattr(config, "DOCUMENT_STORE_DIR", doc_store_dir)
 
+    # Clear DI caches so they pick up the monkeypatched config values.
+    _clear_di_caches()
+
     from app import main
 
-    return TestClient(main.app)
+    yield TestClient(main.app)
+
+    # Clean up after the test so caches don't bleed into the next test.
+    _clear_di_caches()
 
 
 def login(client, identifier: str, password: str) -> str:

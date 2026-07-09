@@ -77,13 +77,19 @@ JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-insecure-secret-change-in-prod
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "480"))  # a work-shift default
 
-# "local" (default) saves uploaded files to disk under DOCUMENT_STORE_DIR - no
-# credentials needed. "gcs" uploads to a Google Cloud Storage bucket via the same
-# service-account file already used for GOOGLE_SERVICE_ACCOUNT_FILE above.
+# "local"  (default) saves files to disk. Files are LOST on Railway redeploys
+#           (ephemeral filesystem). Safe for local dev/test only.
+# "drive"  uploads to a Google Drive folder using the same service-account file
+#           already used for Sheets — free 15 GB, files survive redeploys.
+# "gcs"    legacy stub — falls back to local in the new architecture.
 DOCUMENT_STORE = os.getenv("DOCUMENT_STORE", "local")
 DOCUMENT_STORE_DIR = Path(os.getenv("DOCUMENT_STORE_DIR", str(BACKEND_DIR / "document_store")))
 DOCUMENT_STORE_DIR.mkdir(parents=True, exist_ok=True)
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "")
+# Google Drive folder ID where uploaded documents are stored (DOCUMENT_STORE=drive).
+# Create a folder in Google Drive, share it with the service account email, then
+# copy the folder ID from the URL:  https://drive.google.com/drive/folders/<FOLDER_ID>
+GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
 
 MAX_DOCUMENT_SIZE_MB = int(os.getenv("MAX_DOCUMENT_SIZE_MB", "25"))
 ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".dwg", ".dxf", ".xlsx", ".csv"}

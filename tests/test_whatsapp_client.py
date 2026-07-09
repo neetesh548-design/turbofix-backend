@@ -1,8 +1,11 @@
+"""Tests for the WhatsApp infrastructure client — updated for the SOLID architecture."""
+
 import asyncio
 
 import pytest
 
-from app import config, whatsapp_client
+from app import config
+from app.infrastructure import whatsapp
 
 
 class FakeResponse:
@@ -27,7 +30,7 @@ class FakeAsyncClient:
     async def __aexit__(self, *exc):
         return False
 
-    async def get(self, url, headers=None):
+    async def get(self, url, **kwargs):
         for key, response in self._responses.items():
             if key in url:
                 return response
@@ -49,9 +52,13 @@ def test_download_media_saves_file(tmp_path, monkeypatch):
         media_id: meta_response,
         "lookaside.fbsbx.com": binary_response,
     })
-    monkeypatch.setattr(whatsapp_client.httpx, "AsyncClient", lambda: fake_client)
 
-    path = asyncio.run(whatsapp_client.download_media(media_id))
+    # The new infrastructure.whatsapp module uses resilient_get from http_client.
+    # We patch httpx.AsyncClient since resilient_get uses it under the hood.
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", lambda timeout=None: fake_client)
+
+    path = asyncio.run(whatsapp.download_media(media_id))
 
     assert path.endswith(".oga") or path.endswith(".ogg") or ".oga" in path or ".ogg" in path
     with open(path, "rb") as f:
@@ -68,7 +75,7 @@ class FakePostAsyncClient:
     async def __aexit__(self, *exc):
         return False
 
-    async def post(self, url, headers=None, json=None):
+    async def post(self, url, headers=None, json=None, **kwargs):
         self.calls.append((url, headers, json))
         return FakeResponse(json_data={"messages": [{"id": "wamid.SENT"}]})
 
@@ -81,9 +88,12 @@ def test_send_template_message_posts_expected_payload(monkeypatch):
     monkeypatch.setattr(config, "WHATSAPP_TICKET_TEMPLATE_LANGUAGE", "en_US")
 
     fake_client = FakePostAsyncClient()
-    monkeypatch.setattr(whatsapp_client.httpx, "AsyncClient", lambda: fake_client)
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", lambda timeout=None: fake_client)
 
-    asyncio.run(whatsapp_client.send_template_message("919900011111", ["CNC Lathe 1", "T123", "brief", "High", "919900099999"]))
+    asyncio.run(whatsapp.send_template_message(
+        "919900011111", ["CNC Lathe 1", "T123", "brief", "High", "919900099999"]
+    ))
 
     assert len(fake_client.calls) == 1
     url, headers, body = fake_client.calls[0]

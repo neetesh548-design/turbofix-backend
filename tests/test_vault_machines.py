@@ -75,19 +75,21 @@ def test_new_machine_immediately_visible_via_list(vault_client):
     assert any(m["machine_id"] == created["machine_id"] for m in listed)
 
 
-def test_new_machine_resolvable_by_store_get_machine(vault_client):
-    """A newly created machine must be resolvable the same way the WhatsApp webhook
-    resolves machines (app.store.get_machine), not just via the vault list endpoint."""
-    from app import store
+def test_new_machine_resolvable_by_repo_get(vault_client):
+    """A newly created machine must be resolvable via the machine repository,
+    the same way the WhatsApp webhook resolves machines."""
+    from app.dependencies import get_machines
 
     token = login(vault_client, *ACME_MAINTENANCE_HEAD)
-    store.load_machines()  # prime the cache before creating
+    machines = get_machines()
+    machines.load()  # prime the cache before creating
 
     created = vault_client.post("/vault/machines", json=NEW_MACHINE_BODY, headers=auth_headers(token)).json()
 
-    machine = store.get_machine(created["machine_id"])
+    machine = machines.get(created["machine_id"])
     assert machine is not None
     assert machine["company_code"] == "ACME3"
+
 
 
 def test_created_machine_scoped_to_callers_company(vault_client):

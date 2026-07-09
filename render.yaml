@@ -25,6 +25,10 @@ services:
         value: /etc/secrets/service-account.json
       - key: GOOGLE_SHEET_ID
         sync: false
+      - key: DOCUMENT_STORE
+        value: drive
+      - key: GOOGLE_DRIVE_FOLDER_ID
+        sync: false
       - key: AI_PROVIDER
         value: auto
       - key: GEMINI_API_KEY

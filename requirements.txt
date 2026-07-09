@@ -7,10 +7,18 @@ gspread>=6.1
 google-auth>=2.30
 pytest>=8.2
 
-# Phase 2 AI layer uses the raw OpenAI HTTP API directly via httpx (no SDK dependency).
+# Phase 2 AI layer uses the raw Gemini/OpenAI HTTP API directly via httpx (no SDK dependency).
 
 # Phase 5 (Document Vault) - JWT auth + password hashing for owner/supervisor/
 # maintenance_head logins, and multipart form parsing for document uploads.
 PyJWT>=2.8
 bcrypt>=4.1
 python-multipart>=0.0.9
+
+# SOLID Architecture additions (P6 — Retry + Structured Logging)
+tenacity>=8.3           # Retry + exponential backoff for Gemini, WhatsApp, Sheets API calls
+structlog>=24.1         # Structured JSON logging (searchable in Railway log dashboard)
+
+# Google Drive file storage (DOCUMENT_STORE=drive — replaces ephemeral local disk)
+google-api-python-client>=2.130
+google-auth-httplib2>=0.2
