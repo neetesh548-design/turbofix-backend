@@ -9,7 +9,7 @@ in main.py so there's still only one process to run/deploy.
 """
 
 import mimetypes
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import quote
 
@@ -157,6 +157,42 @@ def _compute_kpis(company_code: str, company_name: str):
         reverse=True
     )[:5]
 
+    # Owner view: open tickets needing action, most urgent first, oldest first
+    # within the same urgency (a week-old High ticket should shame someone).
+    urgency_rank = {"High": 0, "Medium": 1, "Low": 2}
+    needs_attention = sorted(
+        [{"machine_name": t.get("machine_name"), "urgency": t.get("urgency") or "",
+          "description": t.get("description") or t.get("ai_summary") or "",
+          "reported_at": t.get("reported_at")}
+         for t in tickets if t.get("status") == "Open"],
+        key=lambda x: (urgency_rank.get(x["urgency"], 3), str(x["reported_at"] or "9999")),
+    )
+    urgent_open = sum(1 for t in needs_attention if t["urgency"] == "High")
+
+    # Owner view: tickets reported per ISO week, last 6 weeks (zero-filled so the
+    # chart shows quiet weeks too).
+    def _parse_reported(value):
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(str(value), fmt)
+            except (ValueError, TypeError):
+                continue
+        return None
+
+    today = datetime.now(timezone.utc).date()
+    this_week_start = today - timedelta(days=today.weekday())
+    week_starts = [this_week_start - timedelta(weeks=i) for i in range(5, -1, -1)]
+    week_counts = {ws: 0 for ws in week_starts}
+    for t in tickets:
+        parsed = _parse_reported(t.get("reported_at"))
+        if parsed is None:
+            continue
+        ws = parsed.date() - timedelta(days=parsed.weekday())
+        if ws in week_counts:
+            week_counts[ws] += 1
+    weekly_trend = [{"week_start": ws.strftime("%d %b"), "count": week_counts[ws]}
+                    for ws in week_starts]
+
     return {
         "company_code": company_code,
         "company_name": company_name,
@@ -168,8 +204,11 @@ def _compute_kpis(company_code: str, company_name: str):
             "avg_hours_to_fix": round(avg_hours, 1),
             "plant_health_pct": plant_health,
             "total_machines": total_machines,
+            "urgent_open": urgent_open,
         },
         "recent_activity": recent,
+        "needs_attention": needs_attention,
+        "weekly_trend": weekly_trend,
     }
 
 
