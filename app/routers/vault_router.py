@@ -31,12 +31,17 @@ def list_machines(
     user: CurrentUser = Depends(get_current_user),
     machines: MachineRepository = Depends(get_machines),
 ):
+    from urllib.parse import quote
     all_machines = machines.load()
-    return [
-        {"machine_id": machine_id, **machine}
-        for machine_id, machine in all_machines.items()
-        if machine["company_code"] == user.company_code
-    ]
+    out = []
+    for machine_id, machine in all_machines.items():
+        if machine["company_code"] == user.company_code:
+            wa_link = None
+            if config.WHATSAPP_DISPLAY_NUMBER:
+                text = quote(f"Issue with {machine_id}: ")
+                wa_link = f"https://wa.me/{config.WHATSAPP_DISPLAY_NUMBER}?text={text}"
+            out.append({"machine_id": machine_id, "wa_link": wa_link, **machine})
+    return out
 
 
 class MachineIn(BaseModel):
