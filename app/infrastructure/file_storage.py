@@ -120,9 +120,10 @@ class DriveFileStorage(FileStorage):
     The Drive file ID is returned as storage_path (used later for read/delete).
     """
 
-    def __init__(self, service_account_file: str, drive_folder_id: str):
+    def __init__(self, service_account_file: str, drive_folder_id: str, owner_email: str = ""):
         self._sa_file = service_account_file
         self._folder_id = drive_folder_id
+        self._owner_email = owner_email
 
     def _service(self):
         """Build a Drive API service (lazy import — not needed in local mode)."""
@@ -138,35 +139,43 @@ class DriveFileStorage(FileStorage):
     def _get_or_create_folder(self, drive, parent_id: str, folder_name: str) -> str:
         """Find or create a subfolder under parent_id. Returns the folder ID."""
         safe_name = folder_name.replace("/", "_").replace("\\", "_").strip()
+        escaped_name = safe_name.replace("'", "\\'")
         query = (
-            f"'{parent_id}' in parents and name = '{safe_name}' "
+            f"'{parent_id}' in parents and name = '{escaped_name}' "
             f"and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
         )
-        results = drive.files().list(q=query, fields="files(id)", pageSize=1).execute()
+        results = drive.files().list(
+            q=query, fields="files(id)", pageSize=1, supportsAllDrives=True,
+        ).execute()
         if results.get("files"):
             return results["files"][0]["id"]
         meta = {"name": safe_name, "parents": [parent_id], "mimeType": "application/vnd.google-apps.folder"}
-        folder = drive.files().create(body=meta, fields="id").execute()
+        folder = drive.files().create(body=meta, fields="id", supportsAllDrives=True).execute()
+        log.info("storage.folder_created", name=safe_name, folder_id=folder["id"])
         return folder["id"]
 
     async def save(self, company_name, machine_name, category, title, document_id, filename, content) -> str:
         from googleapiclient.http import MediaIoBaseUpload
 
         drive = self._service()
-        # Create nested folders: company_name / machine_name / category / title
         folder_id = self._folder_id
-        for folder_name in [company_name, machine_name, category, title]:
-            folder_id = self._get_or_create_folder(drive, folder_id, folder_name)
+        try:
+            for folder_name in [company_name, machine_name, category, title]:
+                folder_id = self._get_or_create_folder(drive, folder_id, folder_name)
 
-        safe_name = f"{document_id}_{Path(filename).name}"
-        file_metadata = {"name": safe_name, "parents": [folder_id]}
-        media = MediaIoBaseUpload(io.BytesIO(content), mimetype="application/octet-stream")
-        result = drive.files().create(
-            body=file_metadata, media_body=media, fields="id"
-        ).execute()
-        file_id = result["id"]
-        log.info("storage.saved", backend="drive", file_id=file_id, name=safe_name)
-        return file_id
+            safe_name = f"{document_id}_{Path(filename).name}"
+            file_metadata = {"name": safe_name, "parents": [folder_id]}
+            media = MediaIoBaseUpload(io.BytesIO(content), mimetype="application/octet-stream")
+            result = drive.files().create(
+                body=file_metadata, media_body=media, fields="id",
+                supportsAllDrives=True,
+            ).execute()
+            file_id = result["id"]
+            log.info("storage.saved", backend="drive", file_id=file_id, name=safe_name)
+            return file_id
+        except Exception as exc:
+            log.error("storage.drive_error", error=str(exc), company=company_name, machine=machine_name)
+            raise
 
     async def read(self, storage_path: str) -> bytes:
         from googleapiclient.http import MediaIoBaseDownload
@@ -190,12 +199,60 @@ class DriveFileStorage(FileStorage):
 
 
 # ---------------------------------------------------------------------------
+# Cloudflare R2 backend (production — free 10 GB, S3-compatible)
+# ---------------------------------------------------------------------------
+
+class R2FileStorage(FileStorage):
+    """Stores files in Cloudflare R2 (S3-compatible). Free 10 GB storage."""
+
+    def __init__(self, account_id: str, access_key_id: str, secret_access_key: str, bucket_name: str):
+        self._bucket_name = bucket_name
+        self._endpoint = f"https://{account_id}.r2.cloudflarestorage.com"
+        self._access_key_id = access_key_id
+        self._secret_access_key = secret_access_key
+
+    def _client(self):
+        import boto3
+        return boto3.client(
+            "s3",
+            endpoint_url=self._endpoint,
+            aws_access_key_id=self._access_key_id,
+            aws_secret_access_key=self._secret_access_key,
+            region_name="auto",
+        )
+
+    async def save(self, company_name, machine_name, category, title, document_id, filename, content) -> str:
+        key = _object_key(company_name, machine_name, category, title, document_id, filename)
+        client = self._client()
+        client.put_object(Bucket=self._bucket_name, Key=key, Body=content)
+        log.info("storage.saved", backend="r2", key=key)
+        return key
+
+    async def read(self, storage_path: str) -> bytes:
+        client = self._client()
+        resp = client.get_object(Bucket=self._bucket_name, Key=storage_path)
+        return resp["Body"].read()
+
+    async def delete(self, storage_path: str) -> None:
+        client = self._client()
+        try:
+            client.delete_object(Bucket=self._bucket_name, Key=storage_path)
+            log.info("storage.deleted", backend="r2", key=storage_path)
+        except Exception as exc:
+            log.warning("storage.delete_failed", key=storage_path, error=str(exc))
+
+
+# ---------------------------------------------------------------------------
 # Factory — returns the configured implementation
 # ---------------------------------------------------------------------------
 
 def get_file_storage() -> FileStorage:
     """Return the FileStorage implementation selected by DOCUMENT_STORE env var."""
+    if config.DOCUMENT_STORE == "r2" and config.R2_ACCOUNT_ID:
+        return R2FileStorage(
+            config.R2_ACCOUNT_ID, config.R2_ACCESS_KEY_ID,
+            config.R2_SECRET_ACCESS_KEY, config.R2_BUCKET_NAME,
+        )
     if config.DOCUMENT_STORE == "drive" and config.GOOGLE_DRIVE_FOLDER_ID:
         return DriveFileStorage(config.GOOGLE_SERVICE_ACCOUNT_FILE, config.GOOGLE_DRIVE_FOLDER_ID)
-    # "local" or "gcs" (legacy) both fall back to local disk for now
     return LocalFileStorage(config.DOCUMENT_STORE_DIR)
