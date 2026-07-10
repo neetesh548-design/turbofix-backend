@@ -48,6 +48,16 @@ def _should_use_sheets() -> bool:
     if not os.path.exists(config.GOOGLE_SERVICE_ACCOUNT_FILE):
         log.warning(f"Google service account file not found at '{config.GOOGLE_SERVICE_ACCOUNT_FILE}'. Falling back to local store.")
         return False
+    try:
+        import json
+        with open(config.GOOGLE_SERVICE_ACCOUNT_FILE, "r") as f:
+            data = json.load(f)
+            if not data or "type" not in data or data["type"] != "service_account":
+                log.warning("Google service account file is not a valid service account JSON. Falling back to local store.")
+                return False
+    except Exception as exc:
+        log.warning(f"Failed to read/parse Google service account file: {exc}. Falling back to local store.")
+        return False
     return True
 
 
