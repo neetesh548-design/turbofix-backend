@@ -163,6 +163,7 @@ async def delete_document(
     user: CurrentUser = Depends(get_current_user),
     documents: DocumentRepository = Depends(get_documents),
 ):
+    user.assert_owner()
     storage = get_file_storage()
     await vault_service.delete_document(
         document_id=document_id, user=user, documents=documents, storage=storage,
@@ -244,11 +245,11 @@ def delete_spare_part(
     user: CurrentUser = Depends(get_current_user),
     parts: PartsRepository = Depends(get_parts),
 ):
+    user.assert_owner()
     item = parts.get_item("spare_parts", part_id)
     if item is None:
         raise HTTPException(status_code=404, detail="not found")
     user.assert_same_company(item["company_code"])
-    user.assert_can_write()
     parts.delete_item("spare_parts", part_id)
     return Response(status_code=204)
 
@@ -323,10 +324,10 @@ def delete_consumable(
     user: CurrentUser = Depends(get_current_user),
     parts: PartsRepository = Depends(get_parts),
 ):
+    user.assert_owner()
     item = parts.get_item("consumables", consumable_id)
     if item is None:
         raise HTTPException(status_code=404, detail="not found")
     user.assert_same_company(item["company_code"])
-    user.assert_can_write()
     parts.delete_item("consumables", consumable_id)
     return Response(status_code=204)

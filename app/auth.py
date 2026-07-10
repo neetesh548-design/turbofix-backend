@@ -144,6 +144,13 @@ class CurrentUser:
                 detail="only an owner or maintenance head can do this",
             )
 
+    def assert_owner(self) -> None:
+        if self.role != Role.OWNER.value:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="only the owner can delete",
+            )
+
 
 def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),

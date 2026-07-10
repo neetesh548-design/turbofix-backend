@@ -126,8 +126,7 @@ def delete_custom_kpi(
     kpi_repo: CustomKpiRepository = Depends(get_custom_kpis),
 ):
     """Delete a custom KPI config."""
-    if user.role not in ("owner", "supervisor", "maintenance_head"):
-        raise HTTPException(status_code=403, detail="only owner/supervisor can configure KPIs")
+    user.assert_owner()
 
     kpi = kpi_repo.get_kpi(kpi_id)
     if not kpi or kpi.get("company_code") != user.company_code:
