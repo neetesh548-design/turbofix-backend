@@ -1,8 +1,4 @@
-"""Auth router — login, signup, and password reset endpoints.
-
-Thin HTTP adapter: validates inputs, calls auth/user service logic, returns responses.
-All token creation and password hashing lives in app/auth.py (unchanged).
-"""
+"""Auth router — login, registration, supervisor management, and password reset."""
 
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -30,6 +26,10 @@ log = get_logger("turbofix.auth")
 router = APIRouter(prefix="/auth")
 
 
+def _company_approved(company: dict) -> bool:
+    return str(company.get("approved") or "").strip().lower() in {"yes", "true", "1"}
+
+
 # ---------------------------------------------------------------------------
 # Login
 # ---------------------------------------------------------------------------
@@ -44,6 +44,13 @@ def login(body: LoginRequest, users: UserRepository = Depends(get_users)):
     user = users.get_by_identifier(body.identifier)
     if user is None or not verify_password(body.password, user.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="invalid credentials")
+
+    company = users.get_company(user["company_code"])
+    if company and not _company_approved(company):
+        raise HTTPException(
+            status_code=403,
+            detail="Your company registration is pending TurboFix admin approval. Please contact support.",
+        )
 
     token = create_access_token(
         user_id=user["user_id"], company_code=user["company_code"], role=user["role"]
@@ -62,41 +69,98 @@ def login(body: LoginRequest, users: UserRepository = Depends(get_users)):
 
 
 # ---------------------------------------------------------------------------
-# Self-service signup (supervisor / read-only accounts only)
+# Self-service owner + company registration (pending admin approval)
 # ---------------------------------------------------------------------------
 
-class SignupRequest(BaseModel):
+class RegisterRequest(BaseModel):
     company_code: str
+    company_name: str
     admin_contact_phone: str
+    owner_name: str
+    owner_email: str
+    owner_password: str
+
+
+@router.post("/register", status_code=201)
+def register_company(body: RegisterRequest, users: UserRepository = Depends(get_users)):
+    """Self-service owner registration — creates company (unapproved) + owner account."""
+    company_code = body.company_code.strip().upper()
+    if len(company_code) < 2:
+        raise HTTPException(status_code=400, detail="company code must be at least 2 characters")
+    if not body.owner_email.strip():
+        raise HTTPException(status_code=400, detail="owner email is required")
+    if len(body.owner_password) < 8:
+        raise HTTPException(status_code=400, detail="password must be at least 8 characters")
+
+    if users.get_company(company_code) is not None:
+        raise HTTPException(status_code=409, detail="company code already exists")
+
+    if users.get_by_identifier(body.owner_email.strip()):
+        raise HTTPException(status_code=409, detail="an account with this email already exists")
+    if body.admin_contact_phone.strip() and users.get_by_identifier(body.admin_contact_phone.strip()):
+        raise HTTPException(status_code=409, detail="an account with this phone already exists")
+
+    users.add_company(
+        company_code=company_code,
+        company_name=body.company_name.strip(),
+        admin_contact_phone=body.admin_contact_phone.strip(),
+        machine_quota=5,
+        approved=False,
+    )
+
+    user_id = users.next_user_id(company_code)
+    users.add({
+        "user_id": user_id,
+        "company_code": company_code,
+        "name": body.owner_name.strip(),
+        "phone": body.admin_contact_phone.strip(),
+        "email": body.owner_email.strip(),
+        "role": Role.OWNER.value,
+        "password_hash": hash_password(body.owner_password),
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    })
+
+    log.info("auth.register", company_code=company_code, owner_user=user_id)
+    return {
+        "status": "pending_approval",
+        "message": "Your company has been registered. A TurboFix admin will review and approve your account.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Owner-only: add supervisor to own company
+# ---------------------------------------------------------------------------
+
+class AddSupervisorRequest(BaseModel):
     name: str
     phone: str = ""
     email: str = ""
     password: str
 
 
-@router.post("/signup", status_code=201)
-def signup(body: SignupRequest, users: UserRepository = Depends(get_users)):
-    """Self-service signup — can only ever create a supervisor (read-only) account."""
+@router.post("/supervisors", status_code=201)
+def add_supervisor(
+    body: AddSupervisorRequest,
+    user: CurrentUser = Depends(get_current_user),
+    users: UserRepository = Depends(get_users),
+):
+    """Owner creates a supervisor account under their own company."""
+    user.assert_owner()
+
     if not body.phone and not body.email:
         raise HTTPException(status_code=400, detail="phone or email is required")
     if len(body.password) < 8:
         raise HTTPException(status_code=400, detail="password must be at least 8 characters")
-
-    company = users.get_company(body.company_code)
-    stored_phone = "".join(c for c in str(company.get("admin_contact_phone", "")) if c.isdigit()) if company else ""
-    input_phone = "".join(c for c in body.admin_contact_phone if c.isdigit())
-    if company is None or stored_phone != input_phone:
-        raise HTTPException(status_code=401, detail="company code or admin contact phone is incorrect")
 
     if (body.phone and users.get_by_identifier(body.phone)) or (
         body.email and users.get_by_identifier(body.email)
     ):
         raise HTTPException(status_code=409, detail="an account with this phone or email already exists")
 
-    user_id = users.next_user_id(body.company_code)
+    user_id = users.next_user_id(user.company_code)
     users.add({
         "user_id": user_id,
-        "company_code": body.company_code,
+        "company_code": user.company_code,
         "name": body.name,
         "phone": body.phone,
         "email": body.email,
@@ -105,15 +169,12 @@ def signup(body: SignupRequest, users: UserRepository = Depends(get_users)):
         "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
     })
 
-    token = create_access_token(
-        user_id=user_id, company_code=body.company_code, role=Role.SUPERVISOR.value
-    )
-    log.info("auth.signup", user_id=user_id, company=body.company_code)
+    log.info("auth.add_supervisor", user_id=user_id, company=user.company_code, added_by=user.user_id)
     return {
-        "access_token": token,
-        "token_type": "bearer",
-        "user": {"user_id": user_id, "name": body.name, "role": Role.SUPERVISOR.value,
-                 "company_code": body.company_code},
+        "user_id": user_id,
+        "name": body.name,
+        "role": Role.SUPERVISOR.value,
+        "company_code": user.company_code,
     }
 
 
