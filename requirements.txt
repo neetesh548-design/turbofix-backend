@@ -23,5 +23,5 @@ structlog>=24.1         # Structured JSON logging (searchable in Railway log das
 google-api-python-client>=2.130
 google-auth-httplib2>=0.2
 
-# Cloudflare R2 file storage (DOCUMENT_STORE=r2 — S3-compatible, free 10 GB)
+# S3-compatible file storage (DOCUMENT_STORE=s3 — Backblaze B2 free 10 GB, or R2/AWS)
 boto3>=1.34

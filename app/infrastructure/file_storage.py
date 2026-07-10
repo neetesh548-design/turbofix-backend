@@ -199,33 +199,34 @@ class DriveFileStorage(FileStorage):
 
 
 # ---------------------------------------------------------------------------
-# Cloudflare R2 backend (production — free 10 GB, S3-compatible)
+# S3-compatible backend (Backblaze B2 free 10 GB / Cloudflare R2 / any S3)
 # ---------------------------------------------------------------------------
 
-class R2FileStorage(FileStorage):
-    """Stores files in Cloudflare R2 (S3-compatible). Free 10 GB storage."""
+class S3FileStorage(FileStorage):
+    """Stores files in any S3-compatible service (Backblaze B2, R2, AWS S3, etc.)."""
 
-    def __init__(self, account_id: str, access_key_id: str, secret_access_key: str, bucket_name: str):
-        self._bucket_name = bucket_name
-        self._endpoint = f"https://{account_id}.r2.cloudflarestorage.com"
+    def __init__(self, endpoint_url: str, access_key_id: str, secret_access_key: str, bucket_name: str, region: str = "auto"):
+        self._endpoint_url = endpoint_url
         self._access_key_id = access_key_id
         self._secret_access_key = secret_access_key
+        self._bucket_name = bucket_name
+        self._region = region
 
     def _client(self):
         import boto3
         return boto3.client(
             "s3",
-            endpoint_url=self._endpoint,
+            endpoint_url=self._endpoint_url,
             aws_access_key_id=self._access_key_id,
             aws_secret_access_key=self._secret_access_key,
-            region_name="auto",
+            region_name=self._region,
         )
 
     async def save(self, company_name, machine_name, category, title, document_id, filename, content) -> str:
         key = _object_key(company_name, machine_name, category, title, document_id, filename)
         client = self._client()
         client.put_object(Bucket=self._bucket_name, Key=key, Body=content)
-        log.info("storage.saved", backend="r2", key=key)
+        log.info("storage.saved", backend="s3", key=key)
         return key
 
     async def read(self, storage_path: str) -> bytes:
@@ -237,7 +238,7 @@ class R2FileStorage(FileStorage):
         client = self._client()
         try:
             client.delete_object(Bucket=self._bucket_name, Key=storage_path)
-            log.info("storage.deleted", backend="r2", key=storage_path)
+            log.info("storage.deleted", backend="s3", key=storage_path)
         except Exception as exc:
             log.warning("storage.delete_failed", key=storage_path, error=str(exc))
 
@@ -248,10 +249,10 @@ class R2FileStorage(FileStorage):
 
 def get_file_storage() -> FileStorage:
     """Return the FileStorage implementation selected by DOCUMENT_STORE env var."""
-    if config.DOCUMENT_STORE == "r2" and config.R2_ACCOUNT_ID:
-        return R2FileStorage(
-            config.R2_ACCOUNT_ID, config.R2_ACCESS_KEY_ID,
-            config.R2_SECRET_ACCESS_KEY, config.R2_BUCKET_NAME,
+    if config.DOCUMENT_STORE == "s3" and config.S3_ENDPOINT_URL:
+        return S3FileStorage(
+            config.S3_ENDPOINT_URL, config.S3_ACCESS_KEY_ID,
+            config.S3_SECRET_ACCESS_KEY, config.S3_BUCKET_NAME, config.S3_REGION,
         )
     if config.DOCUMENT_STORE == "drive" and config.GOOGLE_DRIVE_FOLDER_ID:
         return DriveFileStorage(config.GOOGLE_SERVICE_ACCOUNT_FILE, config.GOOGLE_DRIVE_FOLDER_ID)

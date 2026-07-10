@@ -97,11 +97,13 @@ GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "")
 # copy the folder ID from the URL:  https://drive.google.com/drive/folders/<FOLDER_ID>
 GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
 
-# Cloudflare R2 storage (DOCUMENT_STORE=r2 — free 10 GB, S3-compatible)
-R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "")
-R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "")
-R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "")
-R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "turbofix-docs")
+# S3-compatible cloud storage (DOCUMENT_STORE=s3)
+# Works with Backblaze B2 (free 10 GB), Cloudflare R2, or any S3-compatible service.
+S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "")
+S3_ACCESS_KEY_ID = os.getenv("S3_ACCESS_KEY_ID", "")
+S3_SECRET_ACCESS_KEY = os.getenv("S3_SECRET_ACCESS_KEY", "")
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "turbofix-docs")
+S3_REGION = os.getenv("S3_REGION", "us-west-004")
 
 MAX_DOCUMENT_SIZE_MB = int(os.getenv("MAX_DOCUMENT_SIZE_MB", "50"))
 ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".dwg", ".dxf", ".xlsx", ".csv"}
