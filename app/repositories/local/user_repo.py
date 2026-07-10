@@ -134,3 +134,26 @@ class LocalUserRepository(UserRepository):
                     wb.save(self._path)
                     return True
         return False
+
+    def add_company(self, company_code: str, company_name: str, admin_contact_phone: str, machine_quota: int, approved: bool) -> None:
+        from datetime import datetime
+        with self._lock:
+            wb = openpyxl.load_workbook(self._path)
+            if "Companies" not in wb.sheetnames:
+                wb.create_sheet("Companies")
+            ws = wb["Companies"]
+            
+            existing_header = [c.value for c in ws[1]] if ws.max_row >= 1 else []
+            if not existing_header:
+                ws.append(COMPANIES_HEADER)
+            
+            row_data = {
+                "company_code": company_code,
+                "company_name": company_name,
+                "admin_contact_phone": admin_contact_phone,
+                "onboarded_date": datetime.now().strftime("%Y-%m-%d"),
+                "machine_quota": machine_quota,
+                "approved": "yes" if approved else "no"
+            }
+            ws.append([row_data.get(col, "") for col in COMPANIES_HEADER])
+            wb.save(self._path)

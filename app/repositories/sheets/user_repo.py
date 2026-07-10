@@ -83,3 +83,16 @@ class SheetsUserRepository(UserRepository):
             if key in header:
                 ws.update_cell(cell.row, header.index(key) + 1, value)
         return True
+
+    def add_company(self, company_code: str, company_name: str, admin_contact_phone: str, machine_quota: int, approved: bool) -> None:
+        ws = self._ss().worksheet("Companies")
+        from datetime import datetime
+        row_data = {
+            "company_code": company_code,
+            "company_name": company_name,
+            "admin_contact_phone": admin_contact_phone,
+            "onboarded_date": datetime.now().strftime("%Y-%m-%d"),
+            "machine_quota": machine_quota,
+            "approved": "yes" if approved else "no"
+        }
+        ws.append_row([row_data.get(col, "") for col in COMPANIES_HEADER], value_input_option="RAW")

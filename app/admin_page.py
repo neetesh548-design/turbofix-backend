@@ -60,6 +60,44 @@ ADMIN_HTML = r"""<!DOCTYPE html>
   </div>
 
   <div id="adminApp">
+    <details class="card" style="max-width: 100%; margin-bottom: 24px; border: 1px solid #283445; background: #18212e; padding: 18px; border-radius: 12px;">
+      <summary style="cursor:pointer; font-weight:600; outline:none; user-select:none;">+ Onboard New Company</summary>
+      <form id="onboardForm" style="margin-top: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+        <div>
+          <label>Company Code</label>
+          <input type="text" id="onboardCode" placeholder="e.g. XYZ1" required>
+        </div>
+        <div>
+          <label>Company Name</label>
+          <input type="text" id="onboardName" placeholder="e.g. XYZ Engineering" required>
+        </div>
+        <div>
+          <label>Owner Name</label>
+          <input type="text" id="onboardOwnerName" placeholder="e.g. John Doe" required>
+        </div>
+        <div>
+          <label>Owner Phone</label>
+          <input type="text" id="onboardPhone" placeholder="e.g. +919820012345" required>
+        </div>
+        <div>
+          <label>Owner Email</label>
+          <input type="email" id="onboardEmail" placeholder="e.g. owner@xyz.com" required>
+        </div>
+        <div>
+          <label>Owner Password</label>
+          <input type="password" id="onboardPassword" minlength="8" required>
+        </div>
+        <div>
+          <label>Initial Machine Quota</label>
+          <input type="number" id="onboardQuota" value="5" min="1" required>
+        </div>
+        <div style="grid-column: span 2; margin-top: 10px;">
+          <button type="submit" class="btn-primary" id="onboardSubmitBtn" style="padding: 10px 18px; border-radius: 8px;">Onboard & Approve Company</button>
+          <div class="err" id="onboardErr" style="margin-top: 8px;"></div>
+        </div>
+      </form>
+    </details>
+
     <div style="overflow-x:auto;">
       <table id="companiesTable">
         <thead><tr>
@@ -164,6 +202,40 @@ async function patch(code, body) {
     loadCompanies();
   } catch (e) { $("statusMsg").textContent = "Error: " + e.message; }
 }
+
+$("onboardForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const errEl = $("onboardErr");
+  errEl.textContent = "";
+  const btn = $("onboardSubmitBtn");
+  btn.disabled = true;
+  
+  try {
+    const resp = await api("/admin/companies", {
+      method: "POST",
+      body: JSON.stringify({
+        company_code: $("onboardCode").value.trim(),
+        company_name: $("onboardName").value.trim(),
+        admin_contact_phone: $("onboardPhone").value.trim(),
+        owner_name: $("onboardOwnerName").value.trim(),
+        owner_email: $("onboardEmail").value.trim(),
+        owner_password: $("onboardPassword").value,
+        machine_quota: parseInt($("onboardQuota").value, 10),
+      })
+    });
+    if (!resp.ok) {
+      let msg = "Onboarding failed.";
+      try { msg = (await resp.json()).detail || msg; } catch(_) {}
+      throw new Error(msg);
+    }
+    $("onboardForm").reset();
+    loadCompanies();
+  } catch (err) {
+    errEl.textContent = err.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 $("loginBtn").onclick = login;
 $("pw").addEventListener("keypress", e => { if (e.key === "Enter") login(); });

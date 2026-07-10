@@ -9,7 +9,7 @@ from typing import Optional
 
 from app import config
 from app.admin_page import ADMIN_HTML
-from app.auth import create_admin_token, get_current_admin
+from app.auth import create_admin_token, get_current_admin, Role, hash_password
 from app.dependencies import get_machines, get_users
 from app.infrastructure.logging import get_logger
 from app.repositories.base import MachineRepository, UserRepository
@@ -96,6 +96,60 @@ def admin_update_company(
         "approved": _company_approved(company),
         "machines_used": len(machines.get_company_machines(company_code)),
     }
+
+
+class CompanyOnboardRequest(BaseModel):
+    company_code: str
+    company_name: str
+    admin_contact_phone: str
+    owner_name: str
+    owner_email: str
+    owner_password: str
+    machine_quota: int = 5
+
+
+@router.post("/companies", status_code=201)
+def admin_onboard_company(
+    body: CompanyOnboardRequest,
+    _: bool = Depends(get_current_admin),
+    users: UserRepository = Depends(get_users),
+):
+    # 1. Validate inputs
+    company_code = body.company_code.strip().upper()
+    if len(company_code) < 2:
+        raise HTTPException(status_code=400, detail="invalid company code")
+    if len(body.owner_password) < 8:
+        raise HTTPException(status_code=400, detail="password must be at least 8 characters")
+    
+    # 2. Check duplicate
+    if users.get_company(company_code) is not None:
+        raise HTTPException(status_code=409, detail="company code already exists")
+        
+    # 3. Create Company Record
+    users.add_company(
+        company_code=company_code,
+        company_name=body.company_name.strip(),
+        admin_contact_phone=body.admin_contact_phone.strip(),
+        machine_quota=body.machine_quota,
+        approved=True
+    )
+    
+    # 4. Seed Owner Account
+    from datetime import datetime, timezone
+    user_id = users.next_user_id(company_code)
+    users.add({
+        "user_id": user_id,
+        "company_code": company_code,
+        "name": body.owner_name.strip(),
+        "phone": body.admin_contact_phone.strip(),
+        "email": body.owner_email.strip(),
+        "role": Role.OWNER.value,
+        "password_hash": hash_password(body.owner_password),
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    })
+    
+    log.info("admin.company_onboarded", company_code=company_code, owner_user=user_id)
+    return {"status": "created", "company_code": company_code, "owner_user_id": user_id}
 
 
 @router.get("", response_class=HTMLResponse)

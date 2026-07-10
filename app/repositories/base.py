@@ -223,6 +223,10 @@ class UserRepository(ABC):
     def update_company(self, company_code: str, fields: dict) -> bool:
         """Patch fields (machine_quota, approved, …) for one company. Returns True if found."""
 
+    @abstractmethod
+    def add_company(self, company_code: str, company_name: str, admin_contact_phone: str, machine_quota: int, approved: bool) -> None:
+        """Insert a new company row. Keys must match COMPANIES_HEADER."""
+
 
 class DocumentRepository(ABC):
     """Read/write access to the Documents metadata entity."""
