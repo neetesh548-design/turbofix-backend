@@ -46,14 +46,13 @@ def test_owner_can_onboard_up_to_quota_then_is_blocked(vault_client):
 
 
 def test_onboarding_blocked_until_company_is_approved(vault_client):
-    # Unapprove ACME3 via the admin console, then the owner can't onboard.
+    # Unapprove ACME3 via the admin console, then the owner can't log in.
     at = admin_token(vault_client)
     vault_client.post("/admin/companies/ACME3", json={"approved": False}, headers=auth_headers(at))
 
-    token = login(vault_client, *ACME_OWNER)
-    resp = vault_client.post("/vault/machines", json=_machine(1), headers=auth_headers(token))
+    resp = vault_client.post("/auth/login", json={"identifier": ACME_OWNER[0], "password": ACME_OWNER[1]})
     assert resp.status_code == 403
-    assert "pending turbofix approval" in resp.json()["detail"].lower()
+    assert "pending approval" in resp.json()["detail"].lower()
 
 
 def test_raising_quota_lets_owner_onboard_again(vault_client):

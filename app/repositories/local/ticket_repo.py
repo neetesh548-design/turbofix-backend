@@ -220,6 +220,8 @@ class LocalMachineRepository(MachineRepository):
                 "location": row[3],
                 "assigned_technician_phone": row[4],
                 "informed_phones": [p for p in (row[5], row[6], row[7]) if p],
+                "supervisor_id": row[8] if len(row) > 8 and row[8] is not None else "",
+                "last_activity_at": str(row[10]) if len(row) > 10 and row[10] is not None else "",
             }
 
         self._cache = machines
@@ -266,7 +268,29 @@ class LocalMachineRepository(MachineRepository):
             for row_cells in ws.iter_rows(min_row=2, values_only=False):
                 company = row_cells[MACHINES_HEADER.index("company_code")].value
                 if company == company_code:
+                    # Pad short rows (workbooks pre-dating new columns) with None
+                    row_vals = [c.value for c in row_cells]
+                    while len(row_vals) < len(MACHINES_HEADER):
+                        row_vals.append(None)
                     machines.append(
-                        {col: row_cells[i].value for i, col in enumerate(MACHINES_HEADER)}
+                        {col: row_vals[i] for i, col in enumerate(MACHINES_HEADER)}
                     )
             return machines
+
+    def update_machine(self, machine_id: str, fields: dict) -> bool:
+        with self._lock:
+            wb = openpyxl.load_workbook(self._path)
+            if "Machines" not in wb.sheetnames:
+                return False
+            ws = wb["Machines"]
+            existing_header = [c.value for c in ws[1]]
+            target = machine_id.upper()
+            for r in range(2, ws.max_row + 1):
+                if str(ws.cell(row=r, column=1).value).strip().upper() == target:
+                    for key, val in fields.items():
+                        if key in existing_header:
+                            ws.cell(row=r, column=existing_header.index(key) + 1, value=val)
+                    wb.save(self._path)
+                    self.invalidate_cache()
+                    return True
+        return False

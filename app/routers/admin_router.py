@@ -1,18 +1,24 @@
 """Admin router — internal TurboFix-team console for company approval and quota management."""
 
 import secrets
+import mimetypes
+import jwt
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from typing import Optional
 
-from app import config
+from app import config, email_client
 from app.admin_page import ADMIN_HTML
 from app.auth import create_admin_token, get_current_admin, Role, hash_password
 from app.dependencies import get_machines, get_users
 from app.infrastructure.logging import get_logger
 from app.repositories.base import MachineRepository, UserRepository
+from app.infrastructure.file_storage import get_file_storage
+
+_bearer_scheme = HTTPBearer(auto_error=False)
 
 log = get_logger("turbofix.admin")
 router = APIRouter(prefix="/admin")
@@ -57,8 +63,56 @@ def admin_list_companies(
             "machine_quota": _company_quota(c),
             "approved": _company_approved(c),
             "machines_used": len(machines.get_company_machines(code)) if code else 0,
+            "has_payment_screenshot": bool(c.get("payment_screenshot")),
         })
     return out
+
+
+@router.get("/companies/{company_code}/payment-screenshot")
+async def get_payment_screenshot(
+    company_code: str,
+    token: Optional[str] = None,
+    users: UserRepository = Depends(get_users),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
+):
+    auth_token = None
+    if credentials:
+        auth_token = credentials.credentials
+    elif token:
+        auth_token = token
+
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="missing token")
+
+    from app.auth import _ADMIN_PURPOSE
+    try:
+        payload = jwt.decode(auth_token, config.JWT_SECRET_KEY, algorithms=[config.JWT_ALGORITHM])
+    except jwt.PyJWTError:
+        payload = None
+
+    if payload is None or payload.get("purpose") != _ADMIN_PURPOSE:
+        raise HTTPException(status_code=401, detail="admin authentication required")
+
+    company = users.get_company(company_code)
+    if company is None:
+        raise HTTPException(status_code=404, detail="company not found")
+    path = company.get("payment_screenshot")
+    if not path:
+        raise HTTPException(status_code=404, detail="no payment screenshot uploaded")
+
+    storage = get_file_storage()
+    try:
+        content = await storage.read(path)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"Failed to read file: {exc}")
+
+    filename = path.replace("\\", "/").split("/")[-1]
+    media_type = mimetypes.guess_type(filename)[0] or "image/jpeg"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'}
+    )
 
 
 class CompanyUpdate(BaseModel):
@@ -74,8 +128,11 @@ def admin_update_company(
     users: UserRepository = Depends(get_users),
     machines: MachineRepository = Depends(get_machines),
 ):
-    if users.get_company(company_code) is None:
+    company = users.get_company(company_code)
+    if company is None:
         raise HTTPException(status_code=404, detail="company not found")
+
+    was_approved = _company_approved(company)
 
     fields = {}
     if body.machine_quota is not None:
@@ -89,6 +146,26 @@ def admin_update_company(
 
     users.update_company(company_code, fields)
     company = users.get_company(company_code)
+    is_approved = _company_approved(company)
+
+    # Send Welcome Email if company is approved now and wasn't before
+    if is_approved and not was_approved:
+        company_users = users.get_company_users(company_code)
+        owner = next((u for u in company_users if u.get("role") == "owner"), None)
+        if owner and owner.get("email"):
+            email_client.send_email(
+                to=owner["email"],
+                subject="Your TurboFix Company Registration Approved!",
+                body=(
+                    f"Hi {owner.get('name', 'Owner')},\n\n"
+                    f"We are excited to inform you that your TurboFix company registration for {company.get('company_name', company_code)} has been approved!\n\n"
+                    f"You can now log in to your Document Vault and Dashboard using your credentials.\n\n"
+                    f"Login here: http://localhost:8000/vault.html\n\n"
+                    f"Best regards,\n"
+                    f"The TurboFix Team"
+                )
+            )
+
     log.info("admin.company_updated", company_code=company_code, fields=list(fields.keys()))
     return {
         "company_code": company_code,

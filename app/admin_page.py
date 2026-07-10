@@ -102,7 +102,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       <table id="companiesTable">
         <thead><tr>
           <th>Company</th><th>Code</th><th>Admin phone</th>
-          <th>Machines</th><th>Quota</th><th>Status</th><th></th>
+          <th>Machines</th><th>Quota</th><th>Payment Confirmation</th><th>Status</th><th></th>
         </tr></thead>
         <tbody id="rows"></tbody>
       </table>
@@ -165,12 +165,19 @@ async function loadCompanies() {
       ? '<span class="pill ok">approved</span>'
       : '<span class="pill pending">pending</span>';
     const used = `<span class="${over ? "over" : ""}">${c.machines_used}</span>`;
+    
+    // View Payment Link
+    const paymentCell = c.has_payment_screenshot
+      ? `<a href="/admin/companies/${encodeURIComponent(c.company_code)}/payment-screenshot?token=${encodeURIComponent(token)}" target="_blank" style="color:#ff7a1a; font-weight:600; text-decoration:none;">View Confirmation</a>`
+      : '<span class="muted">None</span>';
+
     return `<tr data-code="${esc(c.company_code)}">
       <td>${esc(c.company_name)}</td>
       <td>${esc(c.company_code)}</td>
       <td>${esc(c.admin_contact_phone)}</td>
       <td>${used}</td>
       <td><input type="number" min="0" class="qty" value="${c.machine_quota}"></td>
+      <td>${paymentCell}</td>
       <td>${status}</td>
       <td><div class="row-actions">
         <button class="btn-sm saveQuota">Save quota</button>

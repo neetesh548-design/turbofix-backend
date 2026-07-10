@@ -84,15 +84,46 @@ class SheetsUserRepository(UserRepository):
                 ws.update_cell(cell.row, header.index(key) + 1, value)
         return True
 
-    def add_company(self, company_code: str, company_name: str, admin_contact_phone: str, machine_quota: int, approved: bool) -> None:
+    def add_company(self, company_code: str, company_name: str, admin_contact_phone: str, machine_quota: int, approved: bool, payment_screenshot: str = "", registered_at: str = "") -> None:
         ws = self._ss().worksheet("Companies")
         from datetime import datetime
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         row_data = {
             "company_code": company_code,
             "company_name": company_name,
             "admin_contact_phone": admin_contact_phone,
             "onboarded_date": datetime.now().strftime("%Y-%m-%d"),
             "machine_quota": machine_quota,
-            "approved": "yes" if approved else "no"
+            "approved": "yes" if approved else "no",
+            "payment_screenshot": payment_screenshot,
+            "registered_at": registered_at or now_str,
         }
         ws.append_row([row_data.get(col, "") for col in COMPANIES_HEADER], value_input_option="RAW")
+
+    def get_company_users(self, company_code: str) -> List[dict]:
+        ws = self._ss().worksheet("Users")
+        target = _normalize(company_code)
+        out = []
+        for record in ws.get_all_records():
+            if _normalize(record.get("company_code")) == target:
+                out.append(record)
+        return out
+
+    def update_user(self, user_id: str, fields: dict) -> bool:
+        ws = self._ss().worksheet("Users")
+        header = ws.row_values(1)
+        cell = ws.find(user_id, in_column=1)
+        if cell is None:
+            return False
+        for key, val in fields.items():
+            if key in header:
+                ws.update_cell(cell.row, header.index(key) + 1, val)
+        return True
+
+    def delete_user(self, user_id: str) -> bool:
+        ws = self._ss().worksheet("Users")
+        cell = ws.find(user_id, in_column=1)
+        if cell is None:
+            return False
+        ws.delete_rows(cell.row)
+        return True

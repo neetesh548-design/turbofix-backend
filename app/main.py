@@ -28,7 +28,8 @@ from app.routers.kpi_router import router as kpi_router
 from app.routers.vault_router import router as vault_router
 from app.routers.webhook_router import get_sessions, router as webhook_router
 from app.services.ticket_service import sweep_expired_unnotified
-from app.dependencies import get_events, get_tickets, get_machines
+from app.services.escalation_service import escalation_loop
+from app.dependencies import get_events, get_tickets, get_machines, get_users
 
 configure_logging()
 log = get_logger("turbofix.main")
@@ -51,10 +52,12 @@ async def _sweep_loop() -> None:
 async def _lifespan(app: FastAPI):
     log.info("turbofix.startup", store=config.TICKET_STORE, doc_store=config.DOCUMENT_STORE)
     sweep_task = asyncio.create_task(_sweep_loop())
+    escalation_task = asyncio.create_task(escalation_loop(get_users))
     try:
         yield
     finally:
         sweep_task.cancel()
+        escalation_task.cancel()
         log.info("turbofix.shutdown")
 
 

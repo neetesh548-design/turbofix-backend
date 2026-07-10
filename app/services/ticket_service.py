@@ -218,6 +218,13 @@ async def handle_text_message(
     sessions.open(phone, ticket_id, parsed.machine_id)
     log.info("ticket.created", ticket_id=ticket_id, machine_id=parsed.machine_id, phone=phone)
 
+    # Stamp last_activity_at on the machine so stale detection stays accurate.
+    # This is the only ticket-creation site, so the field is entirely server-written.
+    machines.update_machine(
+        parsed.machine_id,
+        {"last_activity_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")},
+    )
+
     if parsed.description:
         background_tasks.add_task(
             finish_text_ticket, phone, parsed.machine_id, ticket_id,

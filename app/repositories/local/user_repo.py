@@ -85,6 +85,35 @@ class LocalUserRepository(UserRepository):
                     return True
         return False
 
+    def update_user(self, user_id: str, fields: dict) -> bool:
+        with self._lock:
+            wb = openpyxl.load_workbook(self._path)
+            if "Users" not in wb.sheetnames:
+                return False
+            ws = wb["Users"]
+            existing_header = [c.value for c in ws[1]]
+            for r in range(2, ws.max_row + 1):
+                if ws.cell(row=r, column=1).value == user_id:
+                    for key, val in fields.items():
+                        if key in existing_header:
+                            ws.cell(row=r, column=existing_header.index(key) + 1, value=val)
+                    wb.save(self._path)
+                    return True
+        return False
+
+    def delete_user(self, user_id: str) -> bool:
+        with self._lock:
+            wb = openpyxl.load_workbook(self._path)
+            if "Users" not in wb.sheetnames:
+                return False
+            ws = wb["Users"]
+            for r in range(2, ws.max_row + 1):
+                if ws.cell(row=r, column=1).value == user_id:
+                    ws.delete_rows(r, 1)
+                    wb.save(self._path)
+                    return True
+        return False
+
     # ------------------------------------------------------------------
     # Company CRUD
     # ------------------------------------------------------------------
@@ -135,7 +164,7 @@ class LocalUserRepository(UserRepository):
                     return True
         return False
 
-    def add_company(self, company_code: str, company_name: str, admin_contact_phone: str, machine_quota: int, approved: bool) -> None:
+    def add_company(self, company_code: str, company_name: str, admin_contact_phone: str, machine_quota: int, approved: bool, payment_screenshot: str = "", registered_at: str = "") -> None:
         from datetime import datetime
         with self._lock:
             wb = openpyxl.load_workbook(self._path)
@@ -147,13 +176,31 @@ class LocalUserRepository(UserRepository):
             if not existing_header:
                 ws.append(COMPANIES_HEADER)
             
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             row_data = {
                 "company_code": company_code,
                 "company_name": company_name,
                 "admin_contact_phone": admin_contact_phone,
                 "onboarded_date": datetime.now().strftime("%Y-%m-%d"),
                 "machine_quota": machine_quota,
-                "approved": "yes" if approved else "no"
+                "approved": "yes" if approved else "no",
+                "payment_screenshot": payment_screenshot,
+                "registered_at": registered_at or now_str,
             }
             ws.append([row_data.get(col, "") for col in COMPANIES_HEADER])
             wb.save(self._path)
+
+    def get_company_users(self, company_code: str) -> List[dict]:
+        wb = openpyxl.load_workbook(self._path, data_only=True)
+        if "Users" not in wb.sheetnames:
+            return []
+        ws = wb["Users"]
+        target = _normalize(company_code)
+        out = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not row or not row[0]:
+                continue
+            record = dict(zip(USERS_HEADER, row))
+            if _normalize(record.get("company_code")) == target:
+                out.append(record)
+        return out

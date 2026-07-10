@@ -52,7 +52,7 @@ def new_kpi_entry_id() -> str:
 MACHINES_HEADER = [
     "machine_id", "company_code", "machine_name", "location",
     "assigned_technician_phone", "informed_phone_1", "informed_phone_2",
-    "informed_phone_3", "has_open_tickets",
+    "informed_phone_3", "supervisor_id", "has_open_tickets", "last_activity_at",
 ]
 
 TICKETS_HEADER = [
@@ -75,7 +75,7 @@ USERS_HEADER = [
 
 COMPANIES_HEADER = [
     "company_code", "company_name", "admin_contact_phone", "onboarded_date",
-    "machine_quota", "approved",
+    "machine_quota", "approved", "payment_screenshot", "registered_at",
 ]
 
 DOCUMENTS_HEADER = [
@@ -206,6 +206,10 @@ class MachineRepository(ABC):
     def get_company_machines(self, company_code: str) -> List[dict]:
         """Return all machines belonging to a company."""
 
+    @abstractmethod
+    def update_machine(self, machine_id: str, fields: dict) -> bool:
+        """Patch fields on a machine. Returns True if found."""
+
 
 class UserRepository(ABC):
     """Read/write access to the Users and Companies entities."""
@@ -231,6 +235,14 @@ class UserRepository(ABC):
         """Overwrite password_hash for one user. Returns True if found."""
 
     @abstractmethod
+    def update_user(self, user_id: str, fields: dict) -> bool:
+        """Patch user fields (name, email, phone, password_hash, role) in Users sheet. Returns True if found."""
+
+    @abstractmethod
+    def delete_user(self, user_id: str) -> bool:
+        """Delete user row by user_id. Returns True if deleted."""
+
+    @abstractmethod
     def get_company(self, company_code: str) -> Optional[dict]:
         """Return the company dict for company_code, or None."""
 
@@ -243,8 +255,12 @@ class UserRepository(ABC):
         """Patch fields (machine_quota, approved, …) for one company. Returns True if found."""
 
     @abstractmethod
-    def add_company(self, company_code: str, company_name: str, admin_contact_phone: str, machine_quota: int, approved: bool) -> None:
+    def add_company(self, company_code: str, company_name: str, admin_contact_phone: str, machine_quota: int, approved: bool, payment_screenshot: str = "", registered_at: str = "") -> None:
         """Insert a new company row. Keys must match COMPANIES_HEADER."""
+
+    @abstractmethod
+    def get_company_users(self, company_code: str) -> List[dict]:
+        """Return all users belonging to a company."""
 
 
 class DocumentRepository(ABC):

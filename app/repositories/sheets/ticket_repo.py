@@ -182,6 +182,8 @@ class SheetsMachineRepository(MachineRepository):
                 "location": record.get("location"),
                 "assigned_technician_phone": str(record.get("assigned_technician_phone") or ""),
                 "informed_phones": [str(p) for p in informed if p],
+                "supervisor_id": str(record.get("supervisor_id") or ""),
+                "last_activity_at": str(record.get("last_activity_at") or ""),
             }
 
         self._cache = machines
@@ -220,3 +222,15 @@ class SheetsMachineRepository(MachineRepository):
         ws = self._ws()
         all_rows = ws.get_all_records()
         return [r for r in all_rows if r.get("company_code") == company_code]
+
+    def update_machine(self, machine_id: str, fields: dict) -> bool:
+        ws = self._ws()
+        header = ws.row_values(1)
+        cell = ws.find(machine_id.upper(), in_column=1)
+        if cell is None:
+            return False
+        for key, val in fields.items():
+            if key in header:
+                ws.update_cell(cell.row, header.index(key) + 1, val)
+        self.invalidate_cache()
+        return True

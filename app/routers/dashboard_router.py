@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.auth import CurrentUser, get_current_user
+from app.auth import CurrentUser, get_current_user, Role
 from app.dependencies import get_custom_kpis, get_events, get_machines, get_tickets, get_users
 from app.repositories.base import CustomKpiRepository, EventRepository, MachineRepository, TicketRepository, UserRepository
 from app.services import ai_service
@@ -24,11 +24,14 @@ def get_dashboard(
     if not company:
         raise HTTPException(status_code=404, detail="company not found")
 
+    supervisor_id = user.user_id if user.role == Role.SUPERVISOR.value else None
+
     result = compute_kpis(
         company_code=user.company_code,
         company_name=company.get("company_name", ""),
         tickets_repo=tickets,
         machines_repo=machines,
+        supervisor_id=supervisor_id,
     )
 
     kpi_configs = kpi_repo.list_kpis(user.company_code)
@@ -40,6 +43,50 @@ def get_dashboard(
         )
     else:
         result["custom_kpis"] = []
+
+    if user.role == Role.OWNER.value:
+        company_users = users.get_company_users(user.company_code)
+        all_machines = machines.get_company_machines(user.company_code)
+        
+        supervisors_map = []
+        assigned_machine_ids = set()
+        
+        for u in company_users:
+            if u.get("role") == Role.SUPERVISOR.value:
+                sup_id = u["user_id"]
+                sup_machines = [
+                    {
+                        "machine_id": m["machine_id"],
+                        "machine_name": m["machine_name"],
+                        "location": m["location"],
+                        "has_open_tickets": bool(m.get("has_open_tickets")),
+                    }
+                    for m in all_machines
+                    if m.get("supervisor_id") == sup_id
+                ]
+                for m in sup_machines:
+                    assigned_machine_ids.add(m["machine_id"])
+                supervisors_map.append({
+                    "supervisor_id": sup_id,
+                    "name": u["name"],
+                    "phone": u["phone"],
+                    "email": u["email"],
+                    "machines": sup_machines
+                })
+        
+        unassigned_machines = [
+            {
+                "machine_id": m["machine_id"],
+                "machine_name": m["machine_name"],
+                "location": m["location"],
+                "has_open_tickets": bool(m.get("has_open_tickets")),
+            }
+            for m in all_machines
+            if m["machine_id"] not in assigned_machine_ids
+        ]
+        
+        result["supervisors"] = supervisors_map
+        result["unassigned_machines"] = unassigned_machines
 
     return result
 

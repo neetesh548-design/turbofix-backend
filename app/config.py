@@ -133,3 +133,13 @@ RESET_LINK_BASE = os.getenv("RESET_LINK_BASE", "http://localhost:8080/reset-pass
 # The dev default is obviously insecure so a real deployment is forced to set its own.
 PLATFORM_ADMIN_PASSWORD = os.getenv("PLATFORM_ADMIN_PASSWORD", "dev-admin-change-me")
 ADMIN_TOKEN_EXPIRE_MINUTES = int(os.getenv("ADMIN_TOKEN_EXPIRE_MINUTES", "120"))
+
+# Stale machine detection: a machine with no ticket activity for this many days is
+# flagged as "no data" instead of green-healthy, so silence doesn't masquerade as health.
+STALE_MACHINE_DAYS = int(os.getenv("STALE_MACHINE_DAYS", "30"))
+
+# Approval escalation: email to notify if a company registration sits unapproved for too long.
+# Uses the same EMAIL_PROVIDER setting as password reset (console/smtp).
+PLATFORM_ADMIN_EMAIL = os.getenv("PLATFORM_ADMIN_EMAIL", "admin@turbofix.local")
+APPROVAL_ESCALATION_HOURS = int(os.getenv("APPROVAL_ESCALATION_HOURS", "24"))
+

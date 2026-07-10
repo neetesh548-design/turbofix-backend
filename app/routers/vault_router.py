@@ -11,8 +11,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, Upl
 from pydantic import BaseModel
 
 from app import config
-from app.auth import CurrentUser, get_current_user
-from app.dependencies import get_documents, get_machines, get_parts
+from app.auth import CurrentUser, get_current_user, Role
+from app.dependencies import get_documents, get_machines, get_parts, get_users
 from app.infrastructure.file_storage import FileStorage, get_file_storage
 from app.repositories.base import DocumentRepository, MachineRepository, PartsRepository
 from app.services import vault_service
@@ -51,6 +51,28 @@ class MachineIn(BaseModel):
     informed_phone_1: str = ""
     informed_phone_2: str = ""
     informed_phone_3: str = ""
+    supervisor_id: Optional[str] = None
+
+
+@router.get("/supervisors")
+def get_company_supervisors(
+    user: CurrentUser = Depends(get_current_user),
+    users_repo = Depends(get_users),
+):
+    if user.role != Role.OWNER.value:
+        raise HTTPException(status_code=403, detail="Only owners can view supervisors.")
+    company_users = users_repo.get_company_users(user.company_code)
+    supervisors = [
+        {
+            "user_id": u["user_id"],
+            "name": u["name"],
+            "phone": u["phone"],
+            "email": u["email"],
+        }
+        for u in company_users
+        if u.get("role") == Role.SUPERVISOR.value
+    ]
+    return supervisors
 
 
 def _company_quota(company: dict) -> int:
@@ -95,9 +117,15 @@ def create_machine(
                    "Please upgrade your subscription to onboard more machines.",
         )
 
+    body_dict = body.model_dump()
+    if user.role == Role.SUPERVISOR.value:
+        body_dict["supervisor_id"] = user.user_id
+    elif not body_dict.get("supervisor_id"):
+        body_dict["supervisor_id"] = ""
+
     machine_code = machines.next_machine_code(user.company_code)
     machine_id = f"TF-{user.company_code}-{machine_code}"
-    row = {"machine_id": machine_id, "company_code": user.company_code, **body.model_dump()}
+    row = {"machine_id": machine_id, "company_code": user.company_code, **body_dict}
     machines.create(row)
 
     wa_link = None
@@ -106,6 +134,56 @@ def create_machine(
         wa_link = f"https://wa.me/{config.WHATSAPP_DISPLAY_NUMBER}?text={text}"
 
     return {**row, "wa_link": wa_link, "machine_quota": quota, "machines_used": used + 1}
+
+
+class MachineUpdate(BaseModel):
+    machine_name: Optional[str] = None
+    location: Optional[str] = None
+    assigned_technician_phone: Optional[str] = None
+    informed_phone_1: Optional[str] = None
+    informed_phone_2: Optional[str] = None
+    informed_phone_3: Optional[str] = None
+    supervisor_id: Optional[str] = None
+
+
+@router.put("/machines/{machine_id}", status_code=200)
+def update_machine(
+    machine_id: str,
+    body: MachineUpdate,
+    user: CurrentUser = Depends(get_current_user),
+    machines: MachineRepository = Depends(get_machines),
+):
+    user.assert_can_write()
+
+    mach = machines.get(machine_id.upper())
+    if mach is None or mach.get("company_code") != user.company_code:
+        raise HTTPException(status_code=404, detail="machine not found")
+
+    fields = {}
+    if body.machine_name is not None:
+        fields["machine_name"] = body.machine_name.strip()
+    if body.location is not None:
+        fields["location"] = body.location.strip()
+    if body.assigned_technician_phone is not None:
+        fields["assigned_technician_phone"] = body.assigned_technician_phone.strip()
+    if body.informed_phone_1 is not None:
+        fields["informed_phone_1"] = body.informed_phone_1.strip()
+    if body.informed_phone_2 is not None:
+        fields["informed_phone_2"] = body.informed_phone_2.strip()
+    if body.informed_phone_3 is not None:
+        fields["informed_phone_3"] = body.informed_phone_3.strip()
+    
+    # Only owners can change supervisors
+    if body.supervisor_id is not None:
+        if user.role != Role.OWNER.value:
+            raise HTTPException(status_code=403, detail="Only owners can change machine supervisors")
+        fields["supervisor_id"] = body.supervisor_id.strip()
+
+    if not fields:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+
+    machines.update_machine(machine_id.upper(), fields)
+    return {"status": "updated", "machine_id": machine_id.upper()}
 
 
 # ---------------------------------------------------------------------------

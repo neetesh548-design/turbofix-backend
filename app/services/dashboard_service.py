@@ -1,37 +1,122 @@
 """Dashboard service — compute per-company KPIs from live ticket/machine data.
 
-Extracted from the _compute_kpis() function in vault_router.py.
+Design notes (system hardening):
+  1. Objective signals only: `machines_down` and `plant_health_pct` are derived from
+     server-computed open ticket counts, never from the `has_open_tickets` formula column
+     which a supervisor could leave blank.
+  2. Per-machine risk tiers: Low / Medium / High — each machine gets a risk badge so the
+     dashboard reflects live ticket pressure, not just a binary up/down state.
+  3. Stale detection: a machine quiet for > STALE_MACHINE_DAYS is flagged "stale" so
+     silence doesn't masquerade as health.
 """
 
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
+from app import config
 from app.repositories.base import CustomKpiRepository, MachineRepository, TicketRepository
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _parse_dt(value) -> Optional[datetime]:
+    """Tolerant parser for dates stored in various formats by Excel/Sheets backends."""
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(str(value), fmt).replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _machine_risk(open_count: int, tickets_30d: int, last_activity_at: str, now: datetime) -> str:
+    """Return 'stale' | 'low' | 'medium' | 'high'.
+
+    Stale wins over everything else — a silent machine is unknown, not healthy.
+    Risk tiers are purely server-computed; nothing a supervisor self-declares affects them.
+    """
+    # Stale: blank means feature predates this field, treat as unknown
+    if last_activity_at == "" or last_activity_at is None:
+        return "stale"
+    ts = _parse_dt(last_activity_at)
+    if ts is None or (now - ts).days > config.STALE_MACHINE_DAYS:
+        return "stale"
+    if open_count >= 1 or tickets_30d >= 4:
+        return "high"
+    if tickets_30d >= 1:
+        return "medium"
+    return "low"
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
 
 def compute_kpis(
     company_code: str,
     company_name: str,
     tickets_repo: TicketRepository,
     machines_repo: MachineRepository,
+    supervisor_id: Optional[str] = None,
 ) -> dict:
     """Compute live KPI dashboard for a company. Pure function — no I/O calls."""
     machines = machines_repo.get_company_machines(company_code)
     tickets = tickets_repo.get_company_tickets(company_code)
 
-    open_tickets = sum(1 for t in tickets if t.get("status") == "Open")
+    if supervisor_id:
+        machines = [m for m in machines if m.get("supervisor_id") == supervisor_id]
+        machine_ids = {m["machine_id"] for m in machines}
+        tickets = [t for t in tickets if t.get("machine_id") in machine_ids]
+
+    now = datetime.now(timezone.utc)
+    thirty_days_ago = now - timedelta(days=30)
+
+    # ---- Objective server-side counts per machine --------------------------------
+    open_by_machine: dict = {}
+    tickets_30d_by_machine: dict = {}
+    for t in tickets:
+        mid = t.get("machine_id", "")
+        if t.get("status") == "Open":
+            open_by_machine[mid] = open_by_machine.get(mid, 0) + 1
+        ts = _parse_dt(t.get("reported_at"))
+        if ts and ts >= thirty_days_ago:
+            tickets_30d_by_machine[mid] = tickets_30d_by_machine.get(mid, 0) + 1
+
+    # ---- Per-machine risk tiers --------------------------------------------------
+    machine_risk_map: dict = {}
+    for m in machines:
+        mid = m["machine_id"]
+        machine_risk_map[mid] = _machine_risk(
+            open_by_machine.get(mid, 0),
+            tickets_30d_by_machine.get(mid, 0),
+            m.get("last_activity_at", ""),
+            now,
+        )
+
+    # ---- Fleet KPIs --------------------------------------------------------------
+    open_tickets = sum(open_by_machine.values())
     closed_today = sum(
         1 for t in tickets
         if t.get("status") == "Closed"
-        and t.get("closed_at")
-        and datetime.fromisoformat(
-            str(t["closed_at"]).replace("Z", "+00:00")
-        ).date() == datetime.now(timezone.utc).date()
+        and _parse_dt(t.get("closed_at")) is not None
+        and _parse_dt(t["closed_at"]).date() == now.date()
     )
-    machines_down = sum(1 for m in machines if m.get("has_open_tickets"))
+    # machines_down: objective server-computed, never the formula column
+    machines_down = sum(1 for m in machines if open_by_machine.get(m["machine_id"], 0) > 0)
+    stale_machines = sum(1 for r in machine_risk_map.values() if r == "stale")
+    high_risk_machines = sum(1 for r in machine_risk_map.values() if r == "high")
     total_tickets = len(tickets)
     total_machines = len(machines)
+
+    # plant_health: unhealthy = actively broken OR unknown (stale)
+    unhealthy = machines_down + stale_machines
+    plant_health = (
+        100 if total_machines == 0
+        else max(0, int((total_machines - unhealthy) / total_machines * 100))
+    )
 
     # Average hours to fix (closed tickets only)
     closed_tickets = [t for t in tickets if t.get("status") == "Closed"]
@@ -46,11 +131,6 @@ def compute_kpis(
             except (ValueError, TypeError):
                 pass
         avg_hours = hours_sum / count if count > 0 else 0.0
-
-    plant_health = (
-        100 if total_machines == 0
-        else int((total_machines - machines_down) / total_machines * 100)
-    )
 
     # Recent activity (last 5 tickets, most recent first)
     recent = sorted(
@@ -69,7 +149,7 @@ def compute_kpis(
         reverse=True,
     )[:5]
 
-    # Open tickets needing action, most urgent first, oldest first within same urgency
+    # Open tickets needing action — most urgent first, oldest within same urgency
     urgency_rank = {"High": 0, "Medium": 1, "Low": 2}
     needs_attention = sorted(
         [
@@ -87,20 +167,12 @@ def compute_kpis(
     urgent_open = sum(1 for t in needs_attention if t["urgency"] == "High")
 
     # Tickets per ISO week, last 6 weeks (zero-filled)
-    def _parse_reported(value):
-        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
-            try:
-                return datetime.strptime(str(value), fmt)
-            except (ValueError, TypeError):
-                continue
-        return None
-
-    today = datetime.now(timezone.utc).date()
+    today = now.date()
     this_week_start = today - timedelta(days=today.weekday())
     week_starts = [this_week_start - timedelta(weeks=i) for i in range(5, -1, -1)]
     week_counts = {ws: 0 for ws in week_starts}
     for t in tickets:
-        parsed = _parse_reported(t.get("reported_at"))
+        parsed = _parse_dt(t.get("reported_at"))
         if parsed is None:
             continue
         ws = parsed.date() - timedelta(days=parsed.weekday())
@@ -123,8 +195,11 @@ def compute_kpis(
             "plant_health_pct": plant_health,
             "total_machines": total_machines,
             "urgent_open": urgent_open,
+            "stale_machines": stale_machines,
+            "high_risk_machines": high_risk_machines,
         },
         "auto_insights": compute_auto_insights(tickets, machines),
+        "machine_risk_map": machine_risk_map,
         "recent_activity": recent,
         "needs_attention": needs_attention,
         "weekly_trend": weekly_trend,
