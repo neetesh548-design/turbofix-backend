@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 120" width="100%" height="100%">
+  <!-- Definition of gradients -->
+  <defs>
+    <linearGradient id="brandGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22a35a" />
+      <stop offset="100%" stop-color="#125c31" />
+    </linearGradient>
+    <linearGradient id="boltGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f8fafc" />
+      <stop offset="100%" stop-color="#cbd5e1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="100%" height="100%" fill="#0f172a" rx="16" />
+
+  <!-- Logo Icon: Stylized Gear/Shield + Lightning Bolt -->
+  <g transform="translate(25, 20)">
+    <!-- Shield shape -->
+    <path d="M 40 5 C 40 5, 75 15, 75 40 C 75 65, 40 75, 40 75 C 40 75, 5 65, 5 40 C 5 15, 40 5, 40 5 Z" fill="url(#brandGrad)" />
+    <!-- Lightning Bolt -->
+    <path d="M 43 15 L 23 45 L 38 45 L 33 65 L 57 35 L 42 35 Z" fill="url(#boltGrad)" />
+  </g>
+
+  <!-- Brand Typography -->
+  <text x="120" y="74" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="44" font-weight="800" fill="#ffffff" letter-spacing="0.5">Turbo<tspan fill="#22a35a">Fix</tspan></text>
+  <text x="122" y="96" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#64748b" letter-spacing="1.5">SMART MAINTENANCE</text>
+</svg>
