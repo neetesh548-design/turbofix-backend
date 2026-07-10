@@ -97,7 +97,7 @@ GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "")
 # copy the folder ID from the URL:  https://drive.google.com/drive/folders/<FOLDER_ID>
 GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
 
-MAX_DOCUMENT_SIZE_MB = int(os.getenv("MAX_DOCUMENT_SIZE_MB", "25"))
+MAX_DOCUMENT_SIZE_MB = int(os.getenv("MAX_DOCUMENT_SIZE_MB", "50"))
 ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".dwg", ".dxf", ".xlsx", ".csv"}
 
 # Origins allowed to call the vault API from a browser (the demo-site vault.html
