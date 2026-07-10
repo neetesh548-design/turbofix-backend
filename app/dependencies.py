@@ -55,8 +55,13 @@ def _should_use_sheets() -> bool:
             if not data or "type" not in data or data["type"] != "service_account":
                 log.warning("Google service account file is not a valid service account JSON. Falling back to local store.")
                 return False
+        # Attempt to load credentials to catch PEM or private_key corruption early
+        from google.oauth2.service_account import Credentials
+        Credentials.from_service_account_file(config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=[
+            "https://www.googleapis.com/auth/spreadsheets"
+        ])
     except Exception as exc:
-        log.warning(f"Failed to read/parse Google service account file: {exc}. Falling back to local store.")
+        log.warning(f"Failed to load Google service account credentials: {exc}. Falling back to local store.")
         return False
     return True
 
