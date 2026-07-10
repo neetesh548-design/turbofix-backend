@@ -12,8 +12,12 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 # (what production should use).
 TICKET_STORE = os.getenv("TICKET_STORE", "local")
 
+_default_path = BACKEND_DIR / "TurboFix-Tracker.xlsx"
+if not _default_path.exists():
+    _default_path = BACKEND_DIR.parent / "TurboFix-Tracker.xlsx"
+
 TRACKER_XLSX_PATH = os.getenv(
-    "TRACKER_XLSX_PATH", str(BACKEND_DIR.parent / "TurboFix-Tracker.xlsx")
+    "TRACKER_XLSX_PATH", str(_default_path)
 )
 
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "")
