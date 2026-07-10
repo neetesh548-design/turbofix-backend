@@ -3,9 +3,11 @@
 Extracted from the _compute_kpis() function in vault_router.py.
 """
 
+from collections import Counter
 from datetime import datetime, timedelta, timezone
+from typing import List, Optional
 
-from app.repositories.base import MachineRepository, TicketRepository
+from app.repositories.base import CustomKpiRepository, MachineRepository, TicketRepository
 
 
 def compute_kpis(
@@ -122,7 +124,147 @@ def compute_kpis(
             "total_machines": total_machines,
             "urgent_open": urgent_open,
         },
+        "auto_insights": compute_auto_insights(tickets, machines),
         "recent_activity": recent,
         "needs_attention": needs_attention,
         "weekly_trend": weekly_trend,
     }
+
+
+def _parse_dt(value) -> Optional[datetime]:
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(str(value), fmt).replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def compute_auto_insights(tickets: List[dict], machines: List[dict]) -> dict:
+    """Derive MTBF, MTTR, repeat breakdown %, and top problem machines from ticket data."""
+    closed = [t for t in tickets if t.get("status") == "Closed"]
+
+    # MTTR — mean time to repair (hours), from closed tickets with hours_to_fix
+    mttr_values = []
+    for t in closed:
+        try:
+            h = float(t.get("hours_to_fix", 0))
+            if h > 0:
+                mttr_values.append(h)
+        except (ValueError, TypeError):
+            pass
+    mttr = round(sum(mttr_values) / len(mttr_values), 1) if mttr_values else 0
+
+    # MTBF — mean time between failures per machine (hours)
+    machine_tickets: dict[str, list[datetime]] = {}
+    for t in tickets:
+        mid = t.get("machine_id", "")
+        dt = _parse_dt(t.get("reported_at"))
+        if mid and dt:
+            machine_tickets.setdefault(mid, []).append(dt)
+
+    mtbf_intervals = []
+    for mid, times in machine_tickets.items():
+        times.sort()
+        for i in range(1, len(times)):
+            gap = (times[i] - times[i - 1]).total_seconds() / 3600
+            if gap > 0.5:
+                mtbf_intervals.append(gap)
+    mtbf = round(sum(mtbf_intervals) / len(mtbf_intervals), 1) if mtbf_intervals else 0
+
+    # Repeat breakdown % — machines with 3+ tickets in last 30 days
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    recent_by_machine: dict[str, int] = Counter()
+    for t in tickets:
+        dt = _parse_dt(t.get("reported_at"))
+        if dt and dt >= cutoff:
+            recent_by_machine[t.get("machine_id", "")] += 1
+    total_with_tickets = len(recent_by_machine)
+    repeaters = sum(1 for c in recent_by_machine.values() if c >= 3)
+    repeat_pct = round(repeaters / total_with_tickets * 100) if total_with_tickets else 0
+
+    # Top problem machines — most tickets in last 30 days
+    top_machines = sorted(recent_by_machine.items(), key=lambda x: x[1], reverse=True)[:3]
+    machine_names = {m.get("machine_id", ""): m.get("machine_name", "") for m in machines}
+    top_problem = [
+        {"machine_id": mid, "machine_name": machine_names.get(mid, mid), "ticket_count": cnt}
+        for mid, cnt in top_machines
+    ]
+
+    # First response time (avg hours from reported_at to first status change)
+    # Approximated as MTTR for now since we don't track intermediate status changes
+
+    return {
+        "mtbf_hours": mtbf,
+        "mttr_hours": mttr,
+        "repeat_breakdown_pct": repeat_pct,
+        "top_problem_machines": top_problem,
+    }
+
+
+def build_custom_kpi_values(
+    company_code: str,
+    kpi_configs: List[dict],
+    kpi_data: List[dict],
+    auto_insights: dict,
+    base_kpis: dict,
+) -> List[dict]:
+    """Build the final custom KPI tile values for the dashboard."""
+    results = []
+    for cfg in kpi_configs:
+        kpi_id = cfg.get("kpi_id", "")
+        kpi_type = cfg.get("kpi_type", "manual")
+        unit = cfg.get("unit", "")
+        target = cfg.get("target_value", "")
+        warning_th = cfg.get("warning_threshold", "")
+        critical_th = cfg.get("critical_threshold", "")
+
+        value = ""
+        status = "normal"
+
+        if kpi_type == "calc" and cfg.get("kpi_name", "").lower().startswith("downtime cost"):
+            cost_rate = _safe_float(cfg.get("cost_per_hour", 0))
+            hours_lost = base_kpis.get("avg_hours_to_fix", 0) * base_kpis.get("open_tickets", 0)
+            total = cost_rate * hours_lost
+            value = f"Rs {total:,.0f}"
+        elif kpi_type == "auto":
+            name_lower = cfg.get("kpi_name", "").lower()
+            if "mtbf" in name_lower:
+                value = f"{auto_insights.get('mtbf_hours', 0)} hrs"
+            elif "mttr" in name_lower:
+                value = f"{auto_insights.get('mttr_hours', 0)} hrs"
+            elif "repeat" in name_lower:
+                value = f"{auto_insights.get('repeat_breakdown_pct', 0)}%"
+        else:
+            entries = [d for d in kpi_data if d.get("kpi_id") == kpi_id]
+            if entries:
+                value = f"{entries[0].get('value', '')} {unit}".strip()
+            else:
+                value = "—"
+
+        if critical_th and value != "—":
+            num_val = _safe_float(value.replace("Rs", "").replace(",", "").replace("%", "").replace("hrs", "").strip())
+            if num_val and _safe_float(critical_th) and num_val >= _safe_float(critical_th):
+                status = "critical"
+            elif warning_th and _safe_float(warning_th) and num_val >= _safe_float(warning_th):
+                status = "warning"
+
+        results.append({
+            "kpi_id": kpi_id,
+            "kpi_name": cfg.get("kpi_name", ""),
+            "kpi_type": kpi_type,
+            "value": value,
+            "unit": unit,
+            "target": target,
+            "status": status,
+        })
+    return results
+
+
+def _safe_float(val) -> float:
+    try:
+        return float(str(val).replace(",", ""))
+    except (ValueError, TypeError):
+        return 0.0

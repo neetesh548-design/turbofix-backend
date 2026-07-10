@@ -3,10 +3,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import CurrentUser, get_current_user
-from app.dependencies import get_events, get_machines, get_tickets, get_users
-from app.repositories.base import EventRepository, MachineRepository, TicketRepository, UserRepository
+from app.dependencies import get_custom_kpis, get_events, get_machines, get_tickets, get_users
+from app.repositories.base import CustomKpiRepository, EventRepository, MachineRepository, TicketRepository, UserRepository
 from app.services import ai_service
-from app.services.dashboard_service import compute_kpis
+from app.services.dashboard_service import build_custom_kpi_values, compute_kpis
 
 router = APIRouter(prefix="/vault")
 
@@ -17,18 +17,31 @@ def get_dashboard(
     tickets: TicketRepository = Depends(get_tickets),
     machines: MachineRepository = Depends(get_machines),
     users: UserRepository = Depends(get_users),
+    kpi_repo: CustomKpiRepository = Depends(get_custom_kpis),
 ):
     """Return live KPI dashboard for the authenticated user's company."""
     company = users.get_company(user.company_code)
     if not company:
         raise HTTPException(status_code=404, detail="company not found")
 
-    return compute_kpis(
+    result = compute_kpis(
         company_code=user.company_code,
         company_name=company.get("company_name", ""),
         tickets_repo=tickets,
         machines_repo=machines,
     )
+
+    kpi_configs = kpi_repo.list_kpis(user.company_code)
+    if kpi_configs:
+        kpi_data = kpi_repo.list_data(user.company_code)
+        result["custom_kpis"] = build_custom_kpi_values(
+            user.company_code, kpi_configs, kpi_data,
+            result.get("auto_insights", {}), result.get("kpis", {}),
+        )
+    else:
+        result["custom_kpis"] = []
+
+    return result
 
 
 @router.get("/machines/{machine_id}/events")

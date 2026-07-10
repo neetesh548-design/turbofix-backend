@@ -26,6 +26,7 @@ from functools import lru_cache
 
 from app import config
 from app.repositories.base import (
+    CustomKpiRepository,
     DocumentRepository,
     EventRepository,
     MachineRepository,
@@ -144,3 +145,13 @@ def get_parts() -> PartsRepository:
         return SheetsPartsRepository(config.GOOGLE_SERVICE_ACCOUNT_FILE, config.GOOGLE_SHEET_ID)
     from app.repositories.local.parts_repo import LocalPartsRepository
     return LocalPartsRepository(config.TRACKER_XLSX_PATH)
+
+
+@lru_cache(maxsize=1)
+def get_custom_kpis() -> CustomKpiRepository:
+    """Return the configured CustomKpiRepository implementation (cached singleton)."""
+    if config.TICKET_STORE == "sheets":
+        from app.repositories.sheets.kpi_repo import SheetsCustomKpiRepository
+        return SheetsCustomKpiRepository(config.GOOGLE_SERVICE_ACCOUNT_FILE, config.GOOGLE_SHEET_ID)
+    from app.repositories.local.kpi_repo import LocalCustomKpiRepository
+    return LocalCustomKpiRepository()

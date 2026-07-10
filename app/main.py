@@ -24,6 +24,7 @@ from app.routers.admin_router import router as admin_router
 from app.routers.report_router import router as report_router
 from app.routers.auth_router import router as auth_router
 from app.routers.dashboard_router import router as dashboard_router
+from app.routers.kpi_router import router as kpi_router
 from app.routers.vault_router import router as vault_router
 from app.routers.webhook_router import get_sessions, router as webhook_router
 from app.services.ticket_service import sweep_expired_unnotified
@@ -79,6 +80,7 @@ app.include_router(webhook_router)
 app.include_router(auth_router)
 app.include_router(vault_router)
 app.include_router(dashboard_router)
+app.include_router(kpi_router)
 app.include_router(admin_router)
 app.include_router(report_router)
 

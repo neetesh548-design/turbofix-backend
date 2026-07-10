@@ -40,6 +40,14 @@ def new_event_id() -> str:
     return f"EVT-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{secrets.token_hex(2)}"
 
 
+def new_kpi_id() -> str:
+    return f"KPI-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{secrets.token_hex(2)}"
+
+
+def new_kpi_entry_id() -> str:
+    return f"KD-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{secrets.token_hex(2)}"
+
+
 # Column schemas — shared constants so local/sheets repos never drift apart.
 MACHINES_HEADER = [
     "machine_id", "company_code", "machine_name", "location",
@@ -87,6 +95,17 @@ SPARE_PARTS_HEADER = [
 CONSUMABLES_HEADER = [
     "consumable_id", "company_code", "machine_id", "name",
     "quantity_on_hand", "unit", "reorder_level", "notes",
+]
+
+CUSTOM_KPIS_HEADER = [
+    "kpi_id", "company_code", "kpi_name", "kpi_type", "unit",
+    "target_value", "warning_threshold", "critical_threshold",
+    "cost_per_hour", "display_order", "created_at",
+]
+
+KPI_DATA_HEADER = [
+    "entry_id", "company_code", "kpi_id", "value",
+    "recorded_at", "recorded_by",
 ]
 
 
@@ -284,3 +303,35 @@ class PartsRepository(ABC):
     @abstractmethod
     def delete_item(self, kind: str, item_id: str) -> bool:
         """Remove the matching item row. Returns True if found."""
+
+
+class CustomKpiRepository(ABC):
+    """Read/write access to owner-defined custom KPI configs and daily data entries."""
+
+    @abstractmethod
+    def list_kpis(self, company_code: str) -> List[dict]:
+        """Return all custom KPI configs for a company."""
+
+    @abstractmethod
+    def get_kpi(self, kpi_id: str) -> Optional[dict]:
+        """Return a single KPI config, or None."""
+
+    @abstractmethod
+    def add_kpi(self, row: dict) -> None:
+        """Append a new custom KPI config row."""
+
+    @abstractmethod
+    def update_kpi(self, kpi_id: str, updates: dict) -> bool:
+        """Patch fields on a KPI config. Returns True if found."""
+
+    @abstractmethod
+    def delete_kpi(self, kpi_id: str) -> bool:
+        """Remove a custom KPI config. Returns True if found."""
+
+    @abstractmethod
+    def list_data(self, company_code: str, kpi_id: Optional[str] = None, limit: int = 30) -> List[dict]:
+        """Return recent data entries for a company, optionally filtered by kpi_id."""
+
+    @abstractmethod
+    def add_data(self, row: dict) -> None:
+        """Append a new KPI data entry row."""
