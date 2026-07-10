@@ -14,7 +14,7 @@ from app import config
 from app.auth import CurrentUser, get_current_user, Role
 from app.dependencies import get_documents, get_machines, get_parts, get_users
 from app.infrastructure.file_storage import FileStorage, get_file_storage
-from app.repositories.base import DocumentRepository, MachineRepository, PartsRepository
+from app.repositories.base import DocumentRepository, MachineRepository, PartsRepository, UserRepository
 from app.services import vault_service
 from app.infrastructure.logging import get_logger
 
@@ -208,13 +208,17 @@ async def upload_document(
     user: CurrentUser = Depends(get_current_user),
     machines: MachineRepository = Depends(get_machines),
     documents: DocumentRepository = Depends(get_documents),
+    users: UserRepository = Depends(get_users),
 ):
     content = await file.read()
     storage = get_file_storage()
+    company = users.get_company(user.company_code)
+    company_name = company["company_name"] if company else user.company_code
     return await vault_service.upload_document(
         user=user, machine_id=machine_id, category=category, title=title,
         filename=file.filename, content=content,
         machines=machines, documents=documents, storage=storage,
+        company_name=company_name,
     )
 
 

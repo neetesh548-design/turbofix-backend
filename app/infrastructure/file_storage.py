@@ -50,9 +50,10 @@ def validate_upload(filename: str, size_bytes: int) -> None:
         )
 
 
-def _object_key(company_code: str, machine_id: str, document_id: str, filename: str) -> str:
-    safe_name = Path(filename).name  # strip any path components a client might send
-    return f"{company_code}/{machine_id}/{document_id}_{safe_name}"
+def _object_key(company_name: str, machine_name: str, category: str, title: str, document_id: str, filename: str) -> str:
+    safe_name = Path(filename).name
+    safe = lambda s: s.replace("/", "_").replace("\\", "_").strip()
+    return f"{safe(company_name)}/{safe(machine_name)}/{safe(category)}/{safe(title)}/{document_id}_{safe_name}"
 
 
 # ---------------------------------------------------------------------------
@@ -62,8 +63,8 @@ def _object_key(company_code: str, machine_id: str, document_id: str, filename: 
 class FileStorage(ABC):
     @abstractmethod
     async def save(
-        self, company_code: str, machine_id: str, document_id: str,
-        filename: str, content: bytes
+        self, company_name: str, machine_name: str, category: str, title: str,
+        document_id: str, filename: str, content: bytes,
     ) -> str:
         """Save file bytes and return an opaque storage_path string for later retrieval."""
 
@@ -90,8 +91,8 @@ class LocalFileStorage(FileStorage):
     def __init__(self, base_dir: Path):
         self._base = base_dir
 
-    async def save(self, company_code, machine_id, document_id, filename, content) -> str:
-        key = _object_key(company_code, machine_id, document_id, filename)
+    async def save(self, company_name, machine_name, category, title, document_id, filename, content) -> str:
+        key = _object_key(company_name, machine_name, category, title, document_id, filename)
         path = self._base / key
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
@@ -134,19 +135,38 @@ class DriveFileStorage(FileStorage):
         )
         return build("drive", "v3", credentials=creds, cache_discovery=False)
 
-    async def save(self, company_code, machine_id, document_id, filename, content) -> str:
+    def _get_or_create_folder(self, drive, parent_id: str, folder_name: str) -> str:
+        """Find or create a subfolder under parent_id. Returns the folder ID."""
+        safe_name = folder_name.replace("/", "_").replace("\\", "_").strip()
+        query = (
+            f"'{parent_id}' in parents and name = '{safe_name}' "
+            f"and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        )
+        results = drive.files().list(q=query, fields="files(id)", pageSize=1).execute()
+        if results.get("files"):
+            return results["files"][0]["id"]
+        meta = {"name": safe_name, "parents": [parent_id], "mimeType": "application/vnd.google-apps.folder"}
+        folder = drive.files().create(body=meta, fields="id").execute()
+        return folder["id"]
+
+    async def save(self, company_name, machine_name, category, title, document_id, filename, content) -> str:
         from googleapiclient.http import MediaIoBaseUpload
 
         drive = self._service()
-        name = _object_key(company_code, machine_id, document_id, filename).replace("/", "_")
-        file_metadata = {"name": name, "parents": [self._folder_id]}
+        # Create nested folders: company_name / machine_name / category / title
+        folder_id = self._folder_id
+        for folder_name in [company_name, machine_name, category, title]:
+            folder_id = self._get_or_create_folder(drive, folder_id, folder_name)
+
+        safe_name = f"{document_id}_{Path(filename).name}"
+        file_metadata = {"name": safe_name, "parents": [folder_id]}
         media = MediaIoBaseUpload(io.BytesIO(content), mimetype="application/octet-stream")
         result = drive.files().create(
             body=file_metadata, media_body=media, fields="id"
         ).execute()
         file_id = result["id"]
-        log.info("storage.saved", backend="drive", file_id=file_id, name=name)
-        return file_id  # storage_path IS the Drive file ID
+        log.info("storage.saved", backend="drive", file_id=file_id, name=safe_name)
+        return file_id
 
     async def read(self, storage_path: str) -> bytes:
         from googleapiclient.http import MediaIoBaseDownload

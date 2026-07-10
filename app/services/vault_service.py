@@ -35,6 +35,7 @@ async def upload_document(
     machines: MachineRepository,
     documents: DocumentRepository,
     storage: FileStorage,
+    company_name: str = "",
 ) -> dict:
     """Validate, store, and register a new document. Returns the saved document row."""
     user.assert_can_write()
@@ -58,7 +59,10 @@ async def upload_document(
         raise HTTPException(status_code=413, detail=str(exc))
 
     document_id = documents.next_document_id()
-    storage_path = await storage.save(user.company_code, machine_id, document_id, filename, content)
+    if not company_name:
+        company_name = user.company_code
+    machine_name = machine.get("machine_name", machine_id)
+    storage_path = await storage.save(company_name, machine_name, category, title, document_id, filename, content)
 
     row = {
         "document_id": document_id,
