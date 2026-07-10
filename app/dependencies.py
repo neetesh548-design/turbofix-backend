@@ -150,7 +150,7 @@ def get_parts() -> PartsRepository:
 @lru_cache(maxsize=1)
 def get_custom_kpis() -> CustomKpiRepository:
     """Return the configured CustomKpiRepository implementation (cached singleton)."""
-    if config.TICKET_STORE == "sheets":
+    if _should_use_sheets():
         from app.repositories.sheets.kpi_repo import SheetsCustomKpiRepository
         return SheetsCustomKpiRepository(config.GOOGLE_SERVICE_ACCOUNT_FILE, config.GOOGLE_SHEET_ID)
     from app.repositories.local.kpi_repo import LocalCustomKpiRepository
