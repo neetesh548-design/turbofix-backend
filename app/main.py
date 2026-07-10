@@ -13,8 +13,10 @@ All HTTP handling lives in app/routers/.
 """
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -48,16 +50,37 @@ async def _sweep_loop() -> None:
             log.error("sweep.error", error=str(exc))
 
 
+KEEP_ALIVE_URL = os.getenv("KEEP_ALIVE_URL", "")
+KEEP_ALIVE_INTERVAL = int(os.getenv("KEEP_ALIVE_INTERVAL", "840"))  # 14 minutes
+
+
+async def _keep_alive_loop() -> None:
+    """Ping our own public URL every 14 min to prevent Render free-tier from sleeping."""
+    if not KEEP_ALIVE_URL:
+        return
+    log.info("keepalive.started", url=KEEP_ALIVE_URL, interval=KEEP_ALIVE_INTERVAL)
+    async with httpx.AsyncClient() as client:
+        while True:
+            await asyncio.sleep(KEEP_ALIVE_INTERVAL)
+            try:
+                resp = await client.get(f"{KEEP_ALIVE_URL}/health", timeout=10)
+                log.info("keepalive.ping", status=resp.status_code)
+            except Exception as exc:
+                log.warning("keepalive.failed", error=str(exc))
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     log.info("turbofix.startup", store=config.TICKET_STORE, doc_store=config.DOCUMENT_STORE)
     sweep_task = asyncio.create_task(_sweep_loop())
     escalation_task = asyncio.create_task(escalation_loop(get_users))
+    keepalive_task = asyncio.create_task(_keep_alive_loop())
     try:
         yield
     finally:
         sweep_task.cancel()
         escalation_task.cancel()
+        keepalive_task.cancel()
         log.info("turbofix.shutdown")
 
 
