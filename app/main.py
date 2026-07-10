@@ -114,4 +114,10 @@ app.include_router(report_router)
 @app.get("/health", tags=["ops"])
 def health():
     """Health check for Railway / load balancers."""
-    return {"status": "ok", "store": config.TICKET_STORE}
+    return {
+        "status": "ok",
+        "store": config.TICKET_STORE,
+        "doc_store": config.DOCUMENT_STORE,
+        "drive_folder_set": bool(config.GOOGLE_DRIVE_FOLDER_ID),
+        "sa_file_set": bool(config.GOOGLE_SERVICE_ACCOUNT_FILE),
+    }
