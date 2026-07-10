@@ -62,7 +62,11 @@ async def upload_document(
     if not company_name:
         company_name = user.company_code
     machine_name = machine.get("machine_name", machine_id)
-    storage_path = await storage.save(company_name, machine_name, category, title, document_id, filename, content)
+    try:
+        storage_path = await storage.save(company_name, machine_name, category, title, document_id, filename, content)
+    except Exception as exc:
+        log.error("upload.storage_failed", error=str(exc), document_id=document_id)
+        raise HTTPException(status_code=502, detail=f"Storage error: {exc}")
 
     row = {
         "document_id": document_id,
