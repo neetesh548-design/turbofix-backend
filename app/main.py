@@ -114,10 +114,26 @@ app.include_router(report_router)
 @app.get("/health", tags=["ops"])
 def health():
     """Health check for Railway / load balancers."""
-    return {
+    result = {
         "status": "ok",
         "store": config.TICKET_STORE,
         "doc_store": config.DOCUMENT_STORE,
         "drive_folder_set": bool(config.GOOGLE_DRIVE_FOLDER_ID),
         "sa_file_set": bool(config.GOOGLE_SERVICE_ACCOUNT_FILE),
     }
+    if config.DOCUMENT_STORE == "s3":
+        result["s3_endpoint"] = config.S3_ENDPOINT_URL[:40] if config.S3_ENDPOINT_URL else ""
+        result["s3_bucket"] = config.S3_BUCKET_NAME
+        result["s3_key_set"] = bool(config.S3_ACCESS_KEY_ID)
+    return result
+
+
+@app.get("/health/storage", tags=["ops"])
+def health_storage():
+    """Test storage connectivity."""
+    from app.infrastructure.file_storage import get_file_storage
+    try:
+        storage = get_file_storage()
+        return {"status": "ok", "backend": type(storage).__name__}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
