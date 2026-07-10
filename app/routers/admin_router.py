@@ -122,31 +122,45 @@ def admin_onboard_company(
         raise HTTPException(status_code=400, detail="password must be at least 8 characters")
     
     # 2. Check duplicate
-    if users.get_company(company_code) is not None:
+    try:
+        existing_company = users.get_company(company_code)
+    except Exception as exc:
+        log.error("admin.onboard_company.check_duplicate_failed", error=str(exc))
+        raise HTTPException(status_code=500, detail=f"Failed to check duplicate company: {exc}")
+
+    if existing_company is not None:
         raise HTTPException(status_code=409, detail="company code already exists")
         
     # 3. Create Company Record
-    users.add_company(
-        company_code=company_code,
-        company_name=body.company_name.strip(),
-        admin_contact_phone=body.admin_contact_phone.strip(),
-        machine_quota=body.machine_quota,
-        approved=True
-    )
+    try:
+        users.add_company(
+            company_code=company_code,
+            company_name=body.company_name.strip(),
+            admin_contact_phone=body.admin_contact_phone.strip(),
+            machine_quota=body.machine_quota,
+            approved=True
+        )
+    except Exception as exc:
+        log.error("admin.onboard_company.add_company_failed", error=str(exc))
+        raise HTTPException(status_code=500, detail=f"Failed to write company row: {exc}")
     
     # 4. Seed Owner Account
     from datetime import datetime, timezone
-    user_id = users.next_user_id(company_code)
-    users.add({
-        "user_id": user_id,
-        "company_code": company_code,
-        "name": body.owner_name.strip(),
-        "phone": body.admin_contact_phone.strip(),
-        "email": body.owner_email.strip(),
-        "role": Role.OWNER.value,
-        "password_hash": hash_password(body.owner_password),
-        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-    })
+    try:
+        user_id = users.next_user_id(company_code)
+        users.add({
+            "user_id": user_id,
+            "company_code": company_code,
+            "name": body.owner_name.strip(),
+            "phone": body.admin_contact_phone.strip(),
+            "email": body.owner_email.strip(),
+            "role": Role.OWNER.value,
+            "password_hash": hash_password(body.owner_password),
+            "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        })
+    except Exception as exc:
+        log.error("admin.onboard_company.add_user_failed", error=str(exc))
+        raise HTTPException(status_code=500, detail=f"Failed to seed owner user row: {exc}")
     
     log.info("admin.company_onboarded", company_code=company_code, owner_user=user_id)
     return {"status": "created", "company_code": company_code, "owner_user_id": user_id}
